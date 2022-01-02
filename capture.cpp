@@ -52,7 +52,8 @@ static int              fd = -1;
 struct buffer          *buffers;
 static unsigned int     n_buffers;
 static int              out_buf;
-static int              force_format;
+static int              force_yuyv = 0;
+static int              force_uyvy = 0;
 static int              width;
 static int              height;
 static float            fps_N = 30000;
@@ -73,11 +74,15 @@ static int xioctl(int fh, int request, void *arg){
 }
 
 static void process_image(const void *p, int size){
- yuy2Frame.data = (uint8_t*)p;
- if(!converter.Convert(yuy2Frame,uyvyFrame)){ //convert the YUY2 frame into a UYVY frame - NDI doesn't accept a YUY2 frame
-  fprintf(stderr, "Convert failed");       
+ if(force_yuyv == 1){ //if this is enabled - convert from YUY2 to UYVY for NDI
+  yuy2Frame.data = (uint8_t*)p;
+  if(!converter.Convert(yuy2Frame,uyvyFrame)){ //convert the YUY2 frame into a UYVY frame - NDI doesn't accept a YUY2 frame
+   fprintf(stderr, "Convert failed");       
+  }
+  NDI_video_frame.p_data = uyvyFrame.data; //link the UYVY frame data to the NDI frame
+ }else{
+  NDI_video_frame.p_data = (uint8_t*)p; //link the UYVY frame data to the NDI frame 
  }
- NDI_video_frame.p_data = uyvyFrame.data; //link the UYVY frame data to the NDI frame
  NDIlib_send_send_video_v2(pNDI_send, &NDI_video_frame); //send the data out to NDI
 }
 
@@ -261,17 +266,24 @@ static void init_device(void){ //initialize device
   }
   CLEAR(fmt);
   fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-  if(force_format){
+  if(force_yuyv == 1){
    fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
    if(-1 == xioctl(fd, VIDIOC_S_FMT, &fmt)){
     errno_exit("VIDIOC_S_FMT");
    }
    /* Note VIDIOC_S_FMT may change width and height. */
-  }else{
-   /* Preserve original settings as set by v4l2-ctl for example */
-   if (-1 == xioctl(fd, VIDIOC_G_FMT, &fmt)){
-    errno_exit("VIDIOC_G_FMT");
+  }
+
+  if(force_uyvy == 1){
+   fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_UYVY;
+   if(-1 == xioctl(fd, VIDIOC_S_FMT, &fmt)){
+    errno_exit("VIDIOC_S_FMT");
    }
+   /* Note VIDIOC_S_FMT may change width and height. */
+  }
+
+  if (-1 == xioctl(fd, VIDIOC_G_FMT, &fmt)){
+   errno_exit("VIDIOC_G_FMT");
   }
   width = fmt.fmt.pix.width; //store current width and height of the current image
   height = fmt.fmt.pix.height;
@@ -319,7 +331,8 @@ static void usage(FILE *fp, int argc, char **argv){
                  "Options:\n"
                  "-d | --device name   Video device name [%s]\n"
                  "-h | --help          Print this message\n"
-                 "-f | --format        Force pixel format to YUYV\n"
+                 "-f | --yuyv          Force pixel format to YUYV\n"
+                 "-u | --uyvy          Force pixel format to UYVY\n"
                  "-n | --numerator     Set FPS (Frames-per-second) Numerator (default is 30000)\n"
                  "-e | --denominator   Set FPS (Frames-per-second) Denominator (default is 1001)\n"
                  "-v | --video name    Set name of NDI stream (default is Stream)\n"
@@ -327,13 +340,14 @@ static void usage(FILE *fp, int argc, char **argv){
                  argv[0], dev_name);
 }
 
-static const char short_options[] = "d:hfn:e:v:";
+static const char short_options[] = "d:hfun:e:v:";
 
 static const struct option
 long_options[] = {
         { "device", required_argument, NULL, 'd' },
         { "help",   no_argument,       NULL, 'h' },
-        { "format", no_argument,       NULL, 'f' },
+        { "yuyv", no_argument,       NULL, 'f' },
+        { "uyvy", no_argument,       NULL, 'u' },
         { "numerator", required_argument,    NULL, 'n' },
         { "denominator", required_argument,  NULL, 'e' },
         { "video", required_argument,  NULL, 'v' },
@@ -358,8 +372,11 @@ int main(int argc, char **argv){
      usage(stdout, argc, argv);
      exit(EXIT_SUCCESS);
     case 'f':
-     force_format++;
+     force_yuyv = 1;
      break;
+    case 'u':
+     force_uyvy = 1;
+     break; 
     case 'n':
      fps_N = atof(optarg);
      break;
