@@ -9,5 +9,6 @@ apt-get -y install \
     avahi-utils \
     libssl-dev \
     libconfig++-dev \
+    curl \
     || exit 1
 
