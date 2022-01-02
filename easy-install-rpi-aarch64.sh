@@ -1,5 +1,7 @@
 #!/usr/bin/env sh
 
+set -eu
+
 echo "Starting install of V4L2 to NDI for Raspberry Pi 4 64-bit...\n"
 
 echo "Installing prerequisites...\n"
