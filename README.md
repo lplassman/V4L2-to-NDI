@@ -20,7 +20,7 @@ sudo apt install git
 Clone this repository and `cd` into it.
 
 ```
-git clone https://github.com/windows10luke/V4L2-to-NDI.git && cd v4l2-to-ndi
+git clone https://github.com/windows10luke/V4L2-to-NDI.git && cd V4L2-to-NDI
 ```
 
 Compile and install
