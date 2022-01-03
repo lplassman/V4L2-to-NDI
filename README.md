@@ -7,7 +7,7 @@ network.
 
 ## Supported devices
 
-This software is tested with Raspberry Pi 4 boards.
+This software is tested with Raspberry Pi 4 and Intel Mini PCs. It typically runs well on a dual or quad core CPU that is clocked at or above 1.4 GHz, though results vary. This also works well with the TC358743 HDMI to CSI-2 adapter for Raspberry Pi. This particular HDMI adapter handles an HDMI input up to 1080p30 with no framedrops. 
 
 ### Install on Raspberry Pi OS 64-bit (recommended)
 
