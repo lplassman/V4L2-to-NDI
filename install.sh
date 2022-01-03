@@ -2,7 +2,7 @@
 
 INSTALL_DIR="/opt/v4l2ndi"
 BIN_DIR="$INSTALL_DIR/bin"
-LIB_DIR="$INSTALL_DIR/lib"
+LIB_DIR="/usr/lib"
 
 if [ ! -d "$INSTALL_DIR" ]; then
   mkdir "$INSTALL_DIR"
