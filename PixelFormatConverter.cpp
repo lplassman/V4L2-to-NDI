@@ -1059,13 +1059,12 @@ bool zs::PixelFormatConverter::YUY2_to_UYVY(Frame& src, Frame& dst) {
 	dst.sourceID = src.sourceID;
 	dst.frameID = src.frameID;
 
-	for (size_t i = 0; i < (size_t)src.size; i = i + 4) {
+	for (size_t i = 0; i < (size_t)src.size / 4; i++) {
 
-		dst.data[i + 1] = src.data[i];
-		dst.data[i] = src.data[i + 1];
-		dst.data[i + 3] = src.data[i + 2];
-		dst.data[i + 2] = src.data[i + 3];
-
+		const uint32_t yuy2 = ((uint32_t*)src.data)[i];
+		uint32_t uyvy = (yuy2 >> 8) & 0x00ff00ff;
+		uyvy |= ( yuy2 & 0x00ff00ff ) << 8;
+		((uint32_t*)dst.data)[i] = uyvy;
 	}
 
 	return true;
