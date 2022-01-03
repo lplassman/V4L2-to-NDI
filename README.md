@@ -75,5 +75,35 @@ sudo bash ./easy-install-x86_64.sh
 ```
 Installation is now complete!
 
+## Usage
 
+Once the installation process is complete, it will create an executable file located at /opt/v4l2ndi/bin/v4l2ndi
+
+The installer also creates a symlink to /usr/bin so that it can be run from a normal terminal.
+
+To see all the available options run the following
+
+```
+v4l2ndi -h
+```
+
+Typically, this app is run with a 30fps input with a pixel format input of YUV2. This command creates the NDI stream for that given input
+
+```
+v4l2ndi -d /dev/video0 -f
+```
+
+In case a 60fps input is needed, this command would be used instead
+
+```
+v4l2ndi -d /dev/video0 -f -n 60000 -e 1001
+```
+
+## Suggested Hardware
+
+The following latency observations are based on a Raspberry Pi 4 running Raspberry Pi OS 64-bit.
+
+If needing 1080p60, a USB 3.0 HDMI capture interface is required. In this case, I would suggest an Elgato capture card or one that I used made by Hornettek. Latency will be a little higher when using this method compared to the CSI input (about 120ms)
+
+If only using 1080p30, an HDMI to CSI adapter works good and provides lower latency (about 90ms). CPU usage is higher using this method however, and will reduce the number of NDI clients that can be connected at one time.
 
