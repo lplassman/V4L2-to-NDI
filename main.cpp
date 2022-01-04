@@ -235,8 +235,7 @@ static void init_mmap(void){  //initialize buffer
     errno_exit("VIDIOC_QUERYBUF");
    }
    buffers[n_buffers].length = buf.length;
-   buffers[n_buffers].start =
-   mmap(NULL,buf.length,PROT_READ | PROT_WRITE,MAP_SHARED,fd, buf.m.offset);
+   buffers[n_buffers].start = mmap(NULL,buf.length,PROT_READ | PROT_WRITE,MAP_SHARED,fd, buf.m.offset);
    if (MAP_FAILED == buffers[n_buffers].start){
     errno_exit("mmap");
    }
