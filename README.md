@@ -31,7 +31,7 @@ sudo bash ./easy-install-rpi-aarch64.sh
 Installation is now complete!
 
 
-### Install on Raspberry Pi OS 32-bit
+### Install on Raspberry Pi OS 32-bit (not recommended)
 
 Make sure git is installed.
 
