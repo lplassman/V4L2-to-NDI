@@ -10,6 +10,7 @@
 #include <string.h>
 #include <assert.h>
 #include <iostream>
+#include <thread>
 
 #include <getopt.h>             /* getopt_long() */
 
@@ -69,6 +70,7 @@ int                     frame_buffer = 0;
 uint8_t*                p_frame1;
 uint8_t*                p_frame2;
 int                     ndi_async = 0;
+int                     image_threaded = 0;
 
 //Buffers
 struct buffer          *buffers;
@@ -313,13 +315,13 @@ static void process_image_async(const void *p, int size){
 
 static void process_image(const void *p, int size){
  if(force_yuyv == 1){ //if this is enabled - convert from YUY2 to UYVY for NDI
-  yuy2Frame.data = (uint8_t)p;
+  yuy2Frame.data = (uint8_t*)p;
   if(!converter.Convert(yuy2Frame,uyvyFrame)){ //convert the YUY2 frame into a UYVY frame - NDI doesn't accept a YUY2 frame
    fprintf(stderr, "Convert failed\n");       
   }
   NDI_video_frame1.p_data = uyvyFrame.data; //link the UYVY frame data to the NDI frame
  }else{
-  NDI_video_frame1.p_data = (uint8_t)p; //link the UYVY frame data to the NDI frame 
+  NDI_video_frame1.p_data = (uint8_t*)p; //link the UYVY frame data to the NDI frame 
  }
  NDIlib_send_send_video_v2(pNDI_full_send, &NDI_video_frame1); //send the data out to NDI
 }
@@ -346,7 +348,12 @@ static int read_frame(int &fd, enum v4l2_buf_type type, struct buffer *bufs, uns
    if(ndi_async == 1){
     process_image_async(bufs[buf.index].start, buf.bytesused); //send the mmap frame buffer off to be processed
    }else{
-    process_image(bufs[buf.index].start, buf.bytesused); //send the mmap frame buffer off to be processed 
+    if(image_threaded == 1){
+     std::thread image_process(process_image, bufs[buf.index].start, buf.bytesused); //send the mmap frame buffer off to be processed 
+     image_process.join();
+    }else{
+     process_image(bufs[buf.index].start, buf.bytesused); //send the mmap frame buffer off to be processed 
+    }
    }
   }
 
@@ -451,13 +458,14 @@ static void usage(FILE *fp, int argc, char **argv){
                  "-y | --height        Height of Stream (in pixels)\n"
                  "-n | --numerator     Set FPS (Frames-per-second) Numerator (default is 30000)\n"
                  "-e | --denominator   Set FPS (Frames-per-second) Denominator (default is 1001)\n"
+                 "-i | --threaded      Set threading to be enabled for image processing\n"
                  "-a | --async         Set async to be enabled for NDI stream (default is disabled)\n"
                  "-v | --video name    Set name of NDI stream (default is Stream)\n"
                  "",
                  argv[0], dev_name);
 }
 
-static const char short_options[] = "d:hfux:y:n:e:av:";
+static const char short_options[] = "d:hfux:y:n:e:iav:";
 
 static const struct option
 long_options[] = {
@@ -469,6 +477,7 @@ long_options[] = {
         { "height", required_argument,       NULL, 'y' },
         { "numerator", required_argument,    NULL, 'n' },
         { "denominator", required_argument,  NULL, 'e' },
+        { "threaded", no_argument,       NULL, 'i' },
         { "async", no_argument,       NULL, 'a' },
         { "video", required_argument,  NULL, 'v' },
         { 0, 0, 0, 0 }
@@ -509,6 +518,9 @@ int main(int argc, char **argv){
     case 'e':
      fps_D = atof(optarg);
      break;   
+    case 'i':
+     image_threaded = 1;
+     break;  
     case 'a':
      ndi_async = 1;
      break; 
