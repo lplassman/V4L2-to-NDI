@@ -23,7 +23,6 @@
 #include <sys/ioctl.h>
 
 #include <linux/videodev2.h>
-//#include <Processing.NDI.Advanced.h>
 #include <Processing.NDI.Lib.h>
 #include <PixelFormatConverter.h>
 
@@ -69,6 +68,7 @@ int                     m_format = 0;
 int                     frame_buffer = 0;
 uint8_t*                p_frame1;
 uint8_t*                p_frame2;
+int                     ndi_async = 0;
 
 //Buffers
 struct buffer          *buffers;
@@ -276,7 +276,7 @@ int is_writable(int &fd, timeval* tv){
  return select(fd+1, NULL, &fdset, NULL, tv); 
 }
 
-static void process_image(const void *p, int size){
+static void process_image_async(const void *p, int size){
  frame_buffer = 1 - frame_buffer; 
  //std::cout << "Frame size: " << size << std::endl; 
  if(frame_buffer == 0){
@@ -311,6 +311,19 @@ static void process_image(const void *p, int size){
  }
 }
 
+static void process_image(const void *p, int size){
+ if(force_yuyv == 1){ //if this is enabled - convert from YUY2 to UYVY for NDI
+  yuy2Frame.data = (uint8_t)p;
+  if(!converter.Convert(yuy2Frame,uyvyFrame)){ //convert the YUY2 frame into a UYVY frame - NDI doesn't accept a YUY2 frame
+   fprintf(stderr, "Convert failed\n");       
+  }
+  NDI_video_frame1.p_data = uyvyFrame.data; //link the UYVY frame data to the NDI frame
+ }else{
+  NDI_video_frame1.p_data = (uint8_t)p; //link the UYVY frame data to the NDI frame 
+ }
+ NDIlib_send_send_video_v2(pNDI_full_send, &NDI_video_frame1); //send the data out to NDI
+}
+
 static int read_frame(int &fd, enum v4l2_buf_type type, struct buffer *bufs, unsigned int n_buffs){ //this function reads the frame from the video capture device
   struct v4l2_buffer buf;
   //CLEAR(buf);
@@ -330,7 +343,11 @@ static int read_frame(int &fd, enum v4l2_buf_type type, struct buffer *bufs, uns
   assert(buf.index < n_buffs);
   
   if(NDIlib_send_get_no_connections(pNDI_full_send, 10000)){ //wait for a NDI receiver to be present before continuing - no need to encode without a client connected
-   process_image(bufs[buf.index].start, buf.bytesused); //send the mmap frame buffer off to be processed
+   if(ndi_async == 1){
+    process_image_async(bufs[buf.index].start, buf.bytesused); //send the mmap frame buffer off to be processed
+   }else{
+    process_image(bufs[buf.index].start, buf.bytesused); //send the mmap frame buffer off to be processed 
+   }
   }
 
   
@@ -360,12 +377,14 @@ static int mainloop(void){
   NDI_video_frame1.frame_rate_D = fps_D;
   NDI_video_frame1.FourCC = NDIlib_FourCC_type_UYVY; //set NDI to receive the type of frame that is going to be given to it - in this case UYVY
   
-  NDI_video_frame2.xres = m_width;
-  NDI_video_frame2.yres = m_height;
-  NDI_video_frame2.frame_rate_N = fps_N;
-  NDI_video_frame2.frame_rate_D = fps_D;
-  NDI_video_frame2.FourCC = NDIlib_FourCC_type_UYVY; //set NDI to receive the type of frame that is going to be given to it - in this case UYVY
-  
+  if(ndi_async == 1){ //initialize frame2 for async
+   NDI_video_frame2.xres = m_width; 
+   NDI_video_frame2.yres = m_height;
+   NDI_video_frame2.frame_rate_N = fps_N;
+   NDI_video_frame2.frame_rate_D = fps_D;
+   NDI_video_frame2.FourCC = NDIlib_FourCC_type_UYVY; //set NDI to receive the type of frame that is going to be given to it - in this case UYVY
+  }
+
   while(1){ //while loop for querying for new data from video capture device and reading new frames
    for(;;){
     struct timeval tv;
@@ -432,12 +451,13 @@ static void usage(FILE *fp, int argc, char **argv){
                  "-y | --height        Height of Stream (in pixels)\n"
                  "-n | --numerator     Set FPS (Frames-per-second) Numerator (default is 30000)\n"
                  "-e | --denominator   Set FPS (Frames-per-second) Denominator (default is 1001)\n"
+                 "-a | --async         Set async to be enabled for NDI stream (default is disabled)\n"
                  "-v | --video name    Set name of NDI stream (default is Stream)\n"
                  "",
                  argv[0], dev_name);
 }
 
-static const char short_options[] = "d:hfux:y:n:e:v:";
+static const char short_options[] = "d:hfux:y:n:e:av:";
 
 static const struct option
 long_options[] = {
@@ -449,6 +469,7 @@ long_options[] = {
         { "height", required_argument,       NULL, 'y' },
         { "numerator", required_argument,    NULL, 'n' },
         { "denominator", required_argument,  NULL, 'e' },
+        { "async", no_argument,       NULL, 'a' },
         { "video", required_argument,  NULL, 'v' },
         { 0, 0, 0, 0 }
 };
@@ -488,6 +509,9 @@ int main(int argc, char **argv){
     case 'e':
      fps_D = atof(optarg);
      break;   
+    case 'a':
+     ndi_async = 1;
+     break; 
     case 'v':
      ndi_name = optarg;
      break;              
