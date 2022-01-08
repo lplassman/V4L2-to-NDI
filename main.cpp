@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <iostream>
 
 #include <getopt.h>             /* getopt_long() */
 
@@ -24,6 +25,7 @@
 #include <linux/videodev2.h>
 #include <Processing.NDI.Lib.h>
 #include <PixelFormatConverter.h>
+
 
 #define CLEAR(x) memset(&(x), 0, sizeof(x))
 
@@ -71,6 +73,21 @@ static void errno_exit(const char *s){
   exit(EXIT_FAILURE);
 }
 
+unsigned int fourcc(const char* format) {
+	char fourcc[4];
+	memset(&fourcc, 0, sizeof(fourcc));
+	if (format != NULL)
+	{
+		strncpy(fourcc, format, 4);	
+	}
+	return v4l2_fourcc(fourcc[0], fourcc[1], fourcc[2], fourcc[3]);	
+}
+
+std::string fourcc(unsigned int format) {
+	char formatArray[] = { (char)(format&0xff), (char)((format>>8)&0xff), (char)((format>>16)&0xff), (char)((format>>24)&0xff), 0 };
+	return std::string(formatArray, strlen(formatArray));
+}
+
 static int xioctl(int fh, int request, void *arg){
   int r;
   do{
@@ -102,7 +119,7 @@ static void init_device(const char *d_name, int fd, unsigned int d_type, unsigne
   //Query capabilities
   if(-1 == xioctl(fd, VIDIOC_QUERYCAP, &cap)){
    if(EINVAL == errno){
-    fprintf(stderr, "%s is no V4L2 device\\n",d_name);
+    fprintf(stderr, "%s is no V4L2 device\n",d_name);
     exit(EXIT_FAILURE);
    }else{
     errno_exit("VIDIOC_QUERYCAP");
@@ -126,23 +143,48 @@ static void init_device(const char *d_name, int fd, unsigned int d_type, unsigne
     fprintf(stderr, "Cannot get format\n");
 	  errno_exit("VIDIOC_G_FMT");
 	}
+  std::cout << "Current pixel format: " << fourcc(fmt.fmt.pix.pixelformat) << std::endl;
+  fprintf(stderr, "Current frame width: %u\n",fmt.fmt.pix.width); 
+  fprintf(stderr, "Current frame height: %u\n",fmt.fmt.pix.height);  
+
   if (d_width != 0) {
 		fmt.fmt.pix.width = d_width;
+    fprintf(stderr, "Setting frame width to: %u\n",d_width);
 	}
 	if (d_height != 0) {
 		fmt.fmt.pix.height = d_height;
+    fprintf(stderr, "Setting frame height to: %u\n",d_height);
 	}
 	if (d_format != 0) {
 		fmt.fmt.pix.pixelformat = d_format;
+    std::cout << "Setting pixel format to: " << fourcc(d_format) << std::endl;
 	}
+  
+  if (-1 == xioctl(fd, VIDIOC_S_FMT, &fmt)){
+   fprintf(stderr, "Cannot set format\n"); 
+   errno_exit("VIDIOC_S_FMT");
+  }
+
+  if (xioctl(fd, VIDIOC_G_FMT, &fmt) == -1){
+    fprintf(stderr, "Cannot get format\n");
+	  errno_exit("VIDIOC_G_FMT");
+	}
+
+  if((d_format != 0)&&(fmt.fmt.pix.pixelformat != d_format)){
+   std::cout << "Cannot set pixel format to: " << fourcc(d_format) << "." << " Current pixel format: " << fourcc(fmt.fmt.pix.pixelformat) << std::endl;  
+  }
+
+  if((d_width != 0)&&(fmt.fmt.pix.width != d_width)){
+   fprintf(stderr, "Cannot set frame width to: %u. Current width: %u\n",d_width, fmt.fmt.pix.width);  
+  }
+
+  if((d_height != 0)&&(fmt.fmt.pix.height != d_height)){
+   fprintf(stderr, "Cannot set frame height to: %u. Current height: %u\n",d_height, fmt.fmt.pix.height);  
+  }
 
   m_width = fmt.fmt.pix.width;
   m_height = fmt.fmt.pix.height;  
   m_format = fmt.fmt.pix.pixelformat;
-  
-  if (-1 == xioctl(fd, VIDIOC_S_FMT, &fmt)){
-   errno_exit("VIDIOC_S_FMT");
-  }
 }
 
 static void init_mmap(const char *device_name, int &fd, enum v4l2_buf_type type, struct buffer **bufs_out, unsigned int *n_bufs){  //initialize buffer for device
@@ -233,7 +275,7 @@ static void process_image(const void *p, int size){
  if(force_yuyv == 1){ //if this is enabled - convert from YUY2 to UYVY for NDI
   yuy2Frame.data = (uint8_t*)p;
   if(!converter.Convert(yuy2Frame,uyvyFrame)){ //convert the YUY2 frame into a UYVY frame - NDI doesn't accept a YUY2 frame
-   fprintf(stderr, "Convert failed");       
+   fprintf(stderr, "Convert failed\n");       
   }
   NDI_video_frame.p_data = uyvyFrame.data; //link the UYVY frame data to the NDI frame
  }else{
@@ -283,7 +325,7 @@ static int mainloop(void){
    fprintf(stderr, "Failed to create NDI Full Send");
    exit(1);
   }
-  yuy2Frame = zs::Frame(width,height, MAKE_FOURCC_CODE('Y','U','Y','2')); //initialize conversion frame storage - YUY2
+  yuy2Frame = zs::Frame(m_width,m_height, MAKE_FOURCC_CODE('Y','U','Y','2')); //initialize conversion frame storage - YUY2
   uyvyFrame.fourcc = MAKE_FOURCC_CODE('U','Y','V','Y'); //initialize conversion frame storage - UYVY
   NDI_video_frame.xres = m_width;
   NDI_video_frame.yres = m_height;
