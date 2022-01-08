@@ -23,6 +23,7 @@
 #include <sys/ioctl.h>
 
 #include <linux/videodev2.h>
+//#include <Processing.NDI.Advanced.h>
 #include <Processing.NDI.Lib.h>
 #include <PixelFormatConverter.h>
 
@@ -32,7 +33,8 @@
 //Full NDI
 NDIlib_send_create_t NDI_send_create_desc;
 NDIlib_send_instance_t pNDI_full_send;
-NDIlib_video_frame_v2_t NDI_video_frame;
+NDIlib_video_frame_v2_t NDI_video_frame1;
+NDIlib_video_frame_v2_t NDI_video_frame2;
 
 zs::PixelFormatConverter converter;
 zs::Frame yuy2Frame;
@@ -64,6 +66,9 @@ static char             *ndi_name;
 int                     m_width = 0;
 int                     m_height = 0;
 int                     m_format = 0;
+int                     frame_buffer = 0;
+uint8_t*                p_frame1;
+uint8_t*                p_frame2;
 
 //Buffers
 struct buffer          *buffers;
@@ -272,16 +277,38 @@ int is_writable(int &fd, timeval* tv){
 }
 
 static void process_image(const void *p, int size){
- if(force_yuyv == 1){ //if this is enabled - convert from YUY2 to UYVY for NDI
-  yuy2Frame.data = (uint8_t*)p;
-  if(!converter.Convert(yuy2Frame,uyvyFrame)){ //convert the YUY2 frame into a UYVY frame - NDI doesn't accept a YUY2 frame
-   fprintf(stderr, "Convert failed\n");       
+ frame_buffer = 1 - frame_buffer; 
+ //std::cout << "Frame size: " << size << std::endl; 
+ if(frame_buffer == 0){
+  p_frame1 = (uint8_t*)malloc(size);
+  memcpy(p_frame1, (uint8_t*)p, size);
+  if(force_yuyv == 1){ //if this is enabled - convert from YUY2 to UYVY for NDI
+   yuy2Frame.data = p_frame1;
+   if(!converter.Convert(yuy2Frame,uyvyFrame)){ //convert the YUY2 frame into a UYVY frame - NDI doesn't accept a YUY2 frame
+    fprintf(stderr, "Convert failed\n");       
+   }
+   NDI_video_frame1.p_data = uyvyFrame.data; //link the UYVY frame data to the NDI frame
+  }else{
+   NDI_video_frame1.p_data = p_frame1; //link the UYVY frame data to the NDI frame 
   }
-  NDI_video_frame.p_data = uyvyFrame.data; //link the UYVY frame data to the NDI frame
- }else{
-  NDI_video_frame.p_data = (uint8_t*)p; //link the UYVY frame data to the NDI frame 
+  NDIlib_send_send_video_async_v2(pNDI_full_send, &NDI_video_frame1); //send the data out to NDI
+  free(p_frame2);
  }
- NDIlib_send_send_video_v2(pNDI_full_send, &NDI_video_frame); //send the data out to NDI
+ if(frame_buffer == 1){
+  p_frame2 = (uint8_t*)malloc(size);
+  memcpy(p_frame2, (uint8_t*)p, size);
+  if(force_yuyv == 1){ //if this is enabled - convert from YUY2 to UYVY for NDI
+   yuy2Frame.data = p_frame2;
+   if(!converter.Convert(yuy2Frame,uyvyFrame)){ //convert the YUY2 frame into a UYVY frame - NDI doesn't accept a YUY2 frame
+    fprintf(stderr, "Convert failed\n");       
+   }
+   NDI_video_frame2.p_data = uyvyFrame.data; //link the UYVY frame data to the NDI frame
+  }else{
+   NDI_video_frame2.p_data = p_frame2; //link the UYVY frame data to the NDI frame 
+  }
+  NDIlib_send_send_video_async_v2(pNDI_full_send, &NDI_video_frame2); //send the data out to NDI
+  free(p_frame1);
+ }
 }
 
 static int read_frame(int &fd, enum v4l2_buf_type type, struct buffer *bufs, unsigned int n_buffs){ //this function reads the frame from the video capture device
@@ -327,11 +354,17 @@ static int mainloop(void){
   }
   yuy2Frame = zs::Frame(m_width,m_height, MAKE_FOURCC_CODE('Y','U','Y','2')); //initialize conversion frame storage - YUY2
   uyvyFrame.fourcc = MAKE_FOURCC_CODE('U','Y','V','Y'); //initialize conversion frame storage - UYVY
-  NDI_video_frame.xres = m_width;
-  NDI_video_frame.yres = m_height;
-  NDI_video_frame.frame_rate_N = fps_N;
-  NDI_video_frame.frame_rate_D = fps_D;
-  NDI_video_frame.FourCC = NDIlib_FourCC_type_UYVY; //set NDI to receive the type of frame that is going to be given to it - in this case UYVY
+  NDI_video_frame1.xres = m_width;
+  NDI_video_frame1.yres = m_height;
+  NDI_video_frame1.frame_rate_N = fps_N;
+  NDI_video_frame1.frame_rate_D = fps_D;
+  NDI_video_frame1.FourCC = NDIlib_FourCC_type_UYVY; //set NDI to receive the type of frame that is going to be given to it - in this case UYVY
+  
+  NDI_video_frame2.xres = m_width;
+  NDI_video_frame2.yres = m_height;
+  NDI_video_frame2.frame_rate_N = fps_N;
+  NDI_video_frame2.frame_rate_D = fps_D;
+  NDI_video_frame2.FourCC = NDIlib_FourCC_type_UYVY; //set NDI to receive the type of frame that is going to be given to it - in this case UYVY
   
   while(1){ //while loop for querying for new data from video capture device and reading new frames
    for(;;){
