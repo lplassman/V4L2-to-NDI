@@ -10,6 +10,9 @@
 #include <string.h>
 #include <assert.h>
 #include <iostream>
+#include <condition_variable>
+#include <mutex>
+#include <queue>
 #include <thread>
 
 #include <getopt.h>             /* getopt_long() */
@@ -71,6 +74,16 @@ uint8_t*                p_frame1;
 uint8_t*                p_frame2;
 int                     ndi_async = 0;
 int                     image_threaded = 0;
+
+// Queues for communcating between threads
+// These (and the thread functions) should really be in C++ classes, but...
+std::size_t m_max_depth = 3;    // How many items we will queue before dropping them
+std::mutex m_lock;
+std::condition_variable m_condvar;
+std::queue<std::unique_ptr<v4l2_buffer>> m_queue;
+
+// Thread for processing frames
+std::thread image_thread;
 
 //Buffers
 struct buffer          *buffers;
@@ -199,7 +212,7 @@ static void init_mmap(const char *device_name, int &fd, enum v4l2_buf_type type,
   struct buffer *bufs;
   unsigned int b;
   CLEAR(req);
-  req.count = 4;
+  req.count = 8;
   req.type = type;
   req.memory = V4L2_MEMORY_MMAP;
 
@@ -278,6 +291,142 @@ int is_writable(int &fd, timeval* tv){
  return select(fd+1, NULL, &fdset, NULL, tv); 
 }
 
+static void queue_wait(void){
+  // Lock the queue
+  std::unique_lock<std::mutex> lock_queue(m_lock);
+
+  // Until we are woken up with a frame
+  while (m_queue.empty())
+    m_condvar.wait(lock_queue);
+}
+
+static void queue_push(std::unique_ptr<v4l2_buffer> buf){
+  // Lock the queue
+  std::unique_lock<std::mutex> lock_queue(m_lock);
+
+  // Queue the buffer
+  m_queue.push(std::move(buf));
+  // LOG(LOG_DBG, ">");	// Pushed an item on the queue
+
+  // Drop items that are to old if the queue is not keeping up
+  while ((m_max_depth) && (m_queue.size() > m_max_depth))
+  {
+    // Pull the item off the queue and requeue it so we don't loose buffers!
+    std::unique_ptr<v4l2_buffer> item = std::move(m_queue.front());
+    if(-1 == xioctl(fd, VIDIOC_QBUF, item.get())){
+      errno_exit("VIDIOC_QBUF");
+    }
+
+    m_queue.pop();
+    // LOG(LOG_ERR, "!");	// Dropped an item from the queue!
+    printf("!"); fflush(stdout);
+  }
+
+  // Unlock the queue...
+  lock_queue.unlock();
+
+  // ...and wake up the listener
+  m_condvar.notify_one();
+}
+
+static std::unique_ptr<v4l2_buffer> queue_pop_opt(void){
+  // Lock the queue
+  std::unique_lock<std::mutex> lock_queue(m_lock);
+
+  if (m_queue.empty()) {
+    return {};
+  }
+
+  // Get the item from the queue
+  std::unique_ptr<v4l2_buffer> item = std::move(m_queue.front());
+  m_queue.pop();
+
+  // We can unlock the queue now
+  lock_queue.unlock();
+
+  // LOG(LOG_DBG, "<");	// Popped an item off the queue
+  return item;
+}
+
+static void process_image_thread(void){
+  // Used to signal exit
+  bool exit_thread = false;
+
+  v4l2_buffer* last_buf = nullptr;
+
+  std::unique_ptr<NDIlib_video_frame_v2_t> frame, last_frame;
+
+  // Cycle until we are told to exit
+  while (true)
+  {
+    // Wait for the queue to have some data
+    queue_wait();
+
+    while (true)
+    {
+      // See if we have any data
+      auto buf = queue_pop_opt();
+
+      // If there was data available, buf will be valid, otherwise it will be false
+      if (!buf) {
+        // Nothing else on the queue to process, go to sleep
+        break;
+      }
+
+      // A valid unique_ptr to nullptr is submitted as a signal to exit the thread
+      if (buf.get() == nullptr) {
+        exit_thread = true;
+        break;
+      }
+
+      // Convert to UYVY if necessary, copying in-place
+      if(force_yuyv == 1){
+        zs::Frame src, dst;
+        src.fourcc = (uint32_t)zs::ValidFourccCodes::YUY2;
+        src.width = m_width;
+        src.height = m_height;
+        src.size = buf->bytesused;
+        src.data = (uint8_t*)buffers[buf->index].start;
+
+        dst.fourcc = (uint32_t)zs::ValidFourccCodes::UYVY;
+        dst.size = buf->bytesused;
+        dst.data = (uint8_t*)buffers[buf->index].start;
+
+        if(!converter.Convert(src,dst)){
+          fprintf(stderr, "Convert failed\n");
+        }
+
+        // Zero the data elements or zs::~Frame will try to free the memory!
+        src.data = dst.data = nullptr;
+      }
+
+      // Create a new frame we can pass to the NDI stack
+      frame = std::make_unique<NDIlib_video_frame_v2_t>();
+      frame->xres = m_width;
+      frame->yres = m_height;
+      frame->frame_rate_N = fps_N;
+      frame->frame_rate_D = fps_D;
+      frame->FourCC = NDIlib_FourCC_type_UYVY;
+      frame->p_data = (uint8_t*)buffers[buf->index].start;
+
+      // We're now done with the previous v4l2 buffer, so requeue it
+      if (last_buf){
+        if(-1 == xioctl(fd, VIDIOC_QBUF, last_buf)){
+          errno_exit("VIDIOC_QBUF");
+        }
+      }
+
+      // Pass the frame to the NDI stack
+      NDIlib_send_send_video_async_v2(pNDI_full_send, frame.get());
+
+      // Keep references to what we passed to the NDI stack until we queue the
+      // next frame, or the memory could disappear out from under us!
+      last_buf = buf.release();
+      last_frame = std::move(frame);
+    }
+  }
+}
+
 static void process_image_async(const void *p, int size){
  frame_buffer = 1 - frame_buffer; 
  //std::cout << "Frame size: " << size << std::endl; 
@@ -327,11 +476,11 @@ static void process_image(const void *p, int size){
 }
 
 static int read_frame(int &fd, enum v4l2_buf_type type, struct buffer *bufs, unsigned int n_buffs){ //this function reads the frame from the video capture device
-  struct v4l2_buffer buf;
+  auto buf = std::make_unique<v4l2_buffer>();
   //CLEAR(buf);
-  buf.type = type;
-  buf.memory = V4L2_MEMORY_MMAP;
-  if (-1 == xioctl(fd, VIDIOC_DQBUF, &buf)) { //dequeue the buffer - dumps data into the previously set mmap
+  buf->type = type;
+  buf->memory = V4L2_MEMORY_MMAP;
+  if (-1 == xioctl(fd, VIDIOC_DQBUF, buf.get())) { //dequeue the buffer - dumps data into the previously set mmap
    switch (errno){
     case EAGAIN:
      return 0;
@@ -342,24 +491,26 @@ static int read_frame(int &fd, enum v4l2_buf_type type, struct buffer *bufs, uns
      errno_exit("VIDIOC_DQBUF");
    }
   }
-  assert(buf.index < n_buffs);
+  assert(buf->index < n_buffs);
   
   if(NDIlib_send_get_no_connections(pNDI_full_send, 10000)){ //wait for a NDI receiver to be present before continuing - no need to encode without a client connected
+   printf("%x", buf->index & 0x0F);
+   fflush(stdout);
    if(ndi_async == 1){
-    process_image_async(bufs[buf.index].start, buf.bytesused); //send the mmap frame buffer off to be processed
+    process_image_async(bufs[buf->index].start, buf->bytesused); //send the mmap frame buffer off to be processed
    }else{
     if(image_threaded == 1){
-     std::thread image_process(process_image, bufs[buf.index].start, buf.bytesused); //send the mmap frame buffer off to be processed 
-     image_process.join();
+      queue_push(std::move(buf));
     }else{
-     process_image(bufs[buf.index].start, buf.bytesused); //send the mmap frame buffer off to be processed 
+     process_image(bufs[buf->index].start, buf->bytesused); //send the mmap frame buffer off to be processed
     }
    }
   }
 
-  
-  if(-1 == xioctl(fd, VIDIOC_QBUF, &buf)){
+  if(image_threaded == 0){
+    if(-1 == xioctl(fd, VIDIOC_QBUF, buf.get())){
    errno_exit("VIDIOC_QBUF");
+  }
   }
   return 1;
 }
@@ -409,6 +560,7 @@ static int mainloop(void){
      fprintf(stderr, "select timeout\n");
      exit(EXIT_FAILURE);
     }
+
     if(r == 1){
      read_frame(fd, V4L2_BUF_TYPE_VIDEO_CAPTURE, buffers, n_buffers); //read new frame 
     }
@@ -540,9 +692,22 @@ int main(int argc, char **argv){
    init_device(dev_name, fd, V4L2_BUF_TYPE_VIDEO_CAPTURE, V4L2_PIX_FMT_YUYV, width, height); //init v4l2 device 
   }
   init_mmap(dev_name,fd,V4L2_BUF_TYPE_VIDEO_CAPTURE,&buffers,&n_buffers);
+
+  if (image_threaded == 1){
+    image_thread = std::thread(&process_image_thread);
+  }
+
   start_capturing(dev_name, fd, V4L2_BUF_TYPE_VIDEO_CAPTURE, n_buffers);
   mainloop();
   stop_capturing(fd);
+
+  if (image_threaded == 1){
+    // Signal the image thread to exit by sending an empty message
+    auto nullmsg = std::make_unique<v4l2_buffer>();
+    queue_push(std::move(nullmsg));
+    image_thread.join();
+  }
+
   uninit_device();
   close_device();
   fprintf(stderr, "\n");
