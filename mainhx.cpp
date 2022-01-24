@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <iostream>
 
 #include <getopt.h>             /* getopt_long() */
 
@@ -411,23 +412,22 @@ static void process_image_mp(const void *p, int size){
   uint32_t h264_extra_data_size = 0;
   // Compute the total size of the structure
   uint32_t packet_size = sizeof(NDIlib_compressed_packet_t) + size + h264_extra_data_size;
+  std::cout << "P: " << p << std::endl;
   // Allocate the structure
   NDIlib_compressed_packet_t* p_packet = (NDIlib_compressed_packet_t*)malloc(packet_size);
 
-  p_packet->version = NDIlib_compressed_packet_t::version_0;
+  p_packet->version = sizeof(NDIlib_compressed_packet_t);
   p_packet->fourCC = NDIlib_FourCC_type_H264;
   p_packet->data_size = size;
   p_packet->extra_data_size = h264_extra_data_size;
   // Compute the pointer to the compressed h264 data, then copy the memory into place.
-  uint8_t* p_dst_h264_data = (uint8_t*)(1 + p_packet);
-  memcpy(p_dst_h264_data, (uint8_t*)p, size);
-  // Compute the pointer to the ancillary extra data
-  uint8_t* p_dst_extra_h264_data = p_dst_h264_data + size;
-  memcpy(p_dst_extra_h264_data, p_h264_extra_data, h264_extra_data_size);
-
+  //uint8_t* p_dst_h264_data = (uint8_t*)(p_packet + p_packet->version);
+  uint8_t* p_frame_data = (uint8_t*)(p_packet + p_packet->version);
+  memcpy(p_frame_data, (uint8_t*)p, size);
+  std::cout << "Pointer: " << (p_packet + p_packet->version) << std::endl;
   NDI_hx_video_frame.p_data = (uint8_t*)p_packet;
   NDI_hx_video_frame.data_size_in_bytes = packet_size;
-  NDIlib_send_send_video_async_v2(pNDI_hx_send, &NDI_hx_video_frame); //send the data out to NDI
+  NDIlib_send_send_video_v2(pNDI_hx_send, &NDI_hx_video_frame); //send the data out to NDI
 }
 
 static int read_frame(int &fd, enum v4l2_buf_type type, struct buffer *bufs, unsigned int n_buffs){ //this function reads the frame from the video capture device
