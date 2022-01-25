@@ -1,0 +1,11 @@
+[Unit]
+Description=Fixes EDID for TC358743 HDMI to CSI-2 adapter
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/v4l2-ctl --set-edid=file=/opt/v4l2ndi/bin/edid.txt --fix-edid-checksums
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
