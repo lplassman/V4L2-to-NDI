@@ -1,0 +1,17 @@
+[Unit]
+Description=V4L2 to NDI Converter using TC358743 HDMI to CSI-2 adapter
+After=network-online.target
+
+[Service]
+User=root
+LimitRTPRIO=infinity
+LimitMEMLOCK=infinity
+CPUSchedulingPolicy=rr
+CPUSchedulingPriority=99
+ExecStartPre=/usr/bin/v4l2-ctl --set-dv-bt-timings query
+ExecStart=/opt/v4l2ndi/bin/v4l2ndi -u -a -v "Camera"
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
