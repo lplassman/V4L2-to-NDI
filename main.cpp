@@ -494,8 +494,8 @@ static int read_frame(int &fd, enum v4l2_buf_type type, struct buffer *bufs, uns
   assert(buf->index < n_buffs);
   
   if(NDIlib_send_get_no_connections(pNDI_full_send, 10000)){ //wait for a NDI receiver to be present before continuing - no need to encode without a client connected
-   printf("%x", buf->index & 0x0F);
-   fflush(stdout);
+   //printf("%x", buf->index & 0x0F);
+   //fflush(stdout);
    if(ndi_async == 1){
     process_image_async(bufs[buf->index].start, buf->bytesused); //send the mmap frame buffer off to be processed
    }else{
