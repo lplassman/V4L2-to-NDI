@@ -113,3 +113,7 @@ If needing 1080p60, a USB 3.0 HDMI capture interface is required. In this case, 
 
 If only using 1080p30, a HDMI to CSI adapter works good and provides lower latency (about 90ms).
 
+
+## Helpful links
+
+https://wiki.geekworm.com/CSI-2-Software
