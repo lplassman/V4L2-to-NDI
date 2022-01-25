@@ -14,8 +14,8 @@ This software is tested with Raspberry Pi 4 and Intel Mini PCs. It typically run
 Make sure git is installed.
 
 ```
-sudo apt update
-sudo apt install git
+sudo apt update -y
+sudo apt install git -y
 ```
 Clone this repository and `cd` into it.
 
