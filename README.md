@@ -91,7 +91,7 @@ Add the following line into the boot configuration file:
 ```
 dtoverlay=tc358743
 ```
-Run this script to fix EDID on boot:
+Run this script to fix EDID on boot (installs fix-edid.service):
 ```
 sudo bash ./install-edid.sh
 ```
