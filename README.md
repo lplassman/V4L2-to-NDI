@@ -96,6 +96,11 @@ Run this script to fix EDID on boot (installs fix-edid.service):
 sudo bash ./install-edid.sh
 ```
 By default this service file runs v4l2ndi as the root user with realtime CPU scheduling.
+Edit the service file with this command before copying it
+```
+sudo nano ./v4l2ndi_csi.service
+```
+Copy the service and enable it
 ```
 sudo cp ./v4l2ndi_csi.service /etc/systemd/system/
 sudo systemctl enable v4l2ndi_csi.service
