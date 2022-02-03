@@ -619,6 +619,7 @@ static void usage(FILE *fp, int argc, char **argv){
                  "-h | --help          Print this message\n"
                  "-f | --yuyv          Force pixel format to YUYV\n"
                  "-u | --uyvy          Force pixel format to UYVY\n"
+                 "-m | --nv12          Force pixel format to NV12\n"
                  "-x | --width         Width of Stream (in pixels)\n"
                  "-y | --height        Height of Stream (in pixels)\n"
                  "-n | --numerator     Set FPS (Frames-per-second) Numerator (default is 30000)\n"
