@@ -61,6 +61,7 @@ static unsigned int     n_buffers;
 static int              out_buf;
 static int              force_yuyv = 0;
 static int              force_uyvy = 0;
+static int              force_nv12 = 0;
 static int              width = 0;
 static int              height = 0;
 static float            fps_N = 30000;
@@ -406,7 +407,11 @@ static void process_image_thread(void){
       frame->yres = m_height;
       frame->frame_rate_N = fps_N;
       frame->frame_rate_D = fps_D;
-      frame->FourCC = NDIlib_FourCC_type_UYVY;
+      if(force_nv12 == 1){
+       frame->FourCC = NDIlib_FourCC_type_NV12; 
+      }else{
+       frame->FourCC = NDIlib_FourCC_type_UYVY;
+      }
       frame->p_data = (uint8_t*)buffers[buf->index].start;
 
       // We're now done with the previous v4l2 buffer, so requeue it
@@ -533,14 +538,22 @@ static int mainloop(void){
   NDI_video_frame1.yres = m_height;
   NDI_video_frame1.frame_rate_N = fps_N;
   NDI_video_frame1.frame_rate_D = fps_D;
-  NDI_video_frame1.FourCC = NDIlib_FourCC_type_UYVY; //set NDI to receive the type of frame that is going to be given to it - in this case UYVY
-  
+  if(force_nv12 == 1){
+   NDI_video_frame1.FourCC = NDIlib_FourCC_type_NV12; 
+  }else{
+   NDI_video_frame1.FourCC = NDIlib_FourCC_type_UYVY; //set NDI to receive the type of frame that is going to be given to it - in this case UYVY
+  }
+
   if(ndi_async == 1){ //initialize frame2 for async
    NDI_video_frame2.xres = m_width; 
    NDI_video_frame2.yres = m_height;
    NDI_video_frame2.frame_rate_N = fps_N;
    NDI_video_frame2.frame_rate_D = fps_D;
-   NDI_video_frame2.FourCC = NDIlib_FourCC_type_UYVY; //set NDI to receive the type of frame that is going to be given to it - in this case UYVY
+   if(force_nv12 == 1){
+    NDI_video_frame2.FourCC = NDIlib_FourCC_type_NV12; 
+   }else{
+    NDI_video_frame2.FourCC = NDIlib_FourCC_type_UYVY; //set NDI to receive the type of frame that is going to be given to it - in this case UYVY
+   }  
   }
 
   while(1){ //while loop for querying for new data from video capture device and reading new frames
@@ -617,7 +630,7 @@ static void usage(FILE *fp, int argc, char **argv){
                  argv[0], dev_name);
 }
 
-static const char short_options[] = "d:hfux:y:n:e:iav:";
+static const char short_options[] = "d:hfumx:y:n:e:iav:";
 
 static const struct option
 long_options[] = {
@@ -625,6 +638,7 @@ long_options[] = {
         { "help",   no_argument,       NULL, 'h' },
         { "yuyv", no_argument,       NULL, 'f' },
         { "uyvy", no_argument,       NULL, 'u' },
+        { "nv12", no_argument,       NULL, 'm' },
         { "width", required_argument,       NULL, 'x' },
         { "height", required_argument,       NULL, 'y' },
         { "numerator", required_argument,    NULL, 'n' },
@@ -658,6 +672,9 @@ int main(int argc, char **argv){
     case 'u':
      force_uyvy = 1;
      break; 
+    case 'm':
+     force_nv12 = 1;
+     break; 
     case 'x':
      width = atoi(optarg);
      break; 
@@ -690,6 +707,9 @@ int main(int argc, char **argv){
   }
   if(force_yuyv == 1){
    init_device(dev_name, fd, V4L2_BUF_TYPE_VIDEO_CAPTURE, V4L2_PIX_FMT_YUYV, width, height); //init v4l2 device 
+  }
+  if(force_nv12 == 1){
+   init_device(dev_name, fd, V4L2_BUF_TYPE_VIDEO_CAPTURE, V4L2_PIX_FMT_NV12, width, height); //init v4l2 device 
   }
   init_mmap(dev_name,fd,V4L2_BUF_TYPE_VIDEO_CAPTURE,&buffers,&n_buffers);
 
