@@ -436,7 +436,7 @@ static void process_image_thread(void){
       // next frame, or the memory could disappear out from under us!
       last_buf = buf.release();
       last_frame = std::move(frame);
-      frames++; //keeps track of number of frames
+      //frames++; //keeps track of number of frames
     }
   }
 }
@@ -487,7 +487,7 @@ static void process_image(const void *p, int size){
   NDI_video_frame1.p_data = (uint8_t*)p; //link the UYVY frame data to the NDI frame 
  }
  NDIlib_send_send_video_v2(pNDI_full_send, &NDI_video_frame1); //send the data out to NDI
- frames++;
+ //frames++;
 }
 
 static int read_frame(int &fd, enum v4l2_buf_type type, struct buffer *bufs, unsigned int n_buffs){ //this function reads the frame from the video capture device
@@ -531,7 +531,7 @@ static int read_frame(int &fd, enum v4l2_buf_type type, struct buffer *bufs, uns
 }
 
 static int mainloop(void){
-  gettimeofday(&start, NULL); //store starting time
+  //gettimeofday(&start, NULL); //store starting time
   if (!NDIlib_initialize()){	// Cannot run NDI. Most likely because the CPU is not sufficient (see SDK documentation).
    fprintf(stderr, "CPU cannot run NDI");
    return 0;
@@ -589,21 +589,21 @@ static int mainloop(void){
      read_frame(fd, V4L2_BUF_TYPE_VIDEO_CAPTURE, buffers, n_buffers); //read new frame 
     }
     /* EAGAIN - continue select loop. */
-    gettimeofday(&end, NULL);
+    //gettimeofday(&end, NULL);
   
     // Calculating total time taken by the program.
-    double time_taken;
+    //double time_taken;
   
-    time_taken = (end.tv_sec - start.tv_sec) * 1e6;
-    time_taken = (time_taken + (end.tv_usec - start.tv_usec)) * 1e-6;
-    if(time_taken>1.0){ //every second
-     frameRate = (double)frames*0.5 +  frameRate*0.5; //more stable
-     frames = 0;
-     gettimeofday(&start, NULL);
-     averageFrameTimeMilliseconds  = 1000.0/(frameRate==0?0.001:frameRate);
-     std::cout<<"FrameRate was:"<<frameRate<<std::endl;
-     std::cout<<"FrameTime was:"<<averageFrameTimeMilliseconds<<std::endl;
-    }
+    //time_taken = (end.tv_sec - start.tv_sec) * 1e6;
+    //time_taken = (time_taken + (end.tv_usec - start.tv_usec)) * 1e-6;
+    //if(time_taken>1.0){ //every second
+     //frameRate = (double)frames*0.5 +  frameRate*0.5; //more stable
+     //frames = 0;
+     //gettimeofday(&start, NULL);
+     //averageFrameTimeMilliseconds  = 1000.0/(frameRate==0?0.001:frameRate);
+     //std::cout<<"FrameRate was:"<<frameRate<<std::endl;
+     //std::cout<<"FrameTime was:"<<averageFrameTimeMilliseconds<<std::endl;
+    //}
   }
  }
 }
