@@ -235,7 +235,7 @@ static void init_mmap(const char *device_name, int &fd, enum v4l2_buf_type type,
    fprintf(stderr, "Insufficient buffer memory on %s\\n",device_name);
    exit(EXIT_FAILURE);
   }
-
+  //std::cout << "Buffer Size: " << sizeof(*bufs) << std::endl;
   bufs = (buffer*)calloc(req.count, sizeof(*bufs));
 
   if(!bufs){
@@ -406,6 +406,17 @@ static void process_image_thread(void){
         // Zero the data elements or zs::~Frame will try to free the memory!
         src.data = dst.data = nullptr;
       }
+      if(force_uyvy == 1){ //since no conversion is performed, no memcopy has been done - perform memcpy in order to drastically reduce CPU usage
+       frame_buffer = 1 - frame_buffer; 
+       if(frame_buffer == 0){
+        p_frame1 = (uint8_t*)malloc(buf->bytesused);
+        memcpy(p_frame1, (uint8_t*)buffers[buf->index].start, buf->bytesused);
+       }
+       if(frame_buffer == 1){
+        p_frame2 = (uint8_t*)malloc(buf->bytesused);
+        memcpy(p_frame2, (uint8_t*)buffers[buf->index].start, buf->bytesused);
+       }
+      }
 
       // Create a new frame we can pass to the NDI stack
       frame = std::make_unique<NDIlib_video_frame_v2_t>();
@@ -413,15 +424,24 @@ static void process_image_thread(void){
       frame->yres = m_height;
       frame->frame_rate_N = fps_N;
       frame->frame_rate_D = fps_D;
+      // frame->data_size_in_bytes = buf->bytesused; //for some reason this causes a segmentation fault
       if(force_nv12 == 1){
        frame->FourCC = NDIlib_FourCC_type_NV12; 
       }else{
        frame->FourCC = NDIlib_FourCC_type_UYVY;
       }
-      frame->p_data = (uint8_t*)buffers[buf->index].start;
+      if(force_uyvy == 1){
+       if(frame_buffer == 0){
+        frame->p_data = p_frame1;
+       }
+       if(frame_buffer == 1){
+        frame->p_data = p_frame2;
+       }
+      }else{
+       frame->p_data = (uint8_t*)buffers[buf->index].start;
+      }
       //std::cout<<"FrameData is:"<<(uint8_t*)buffers[buf->index].start<<std::endl;
       
-
       // We're now done with the previous v4l2 buffer, so requeue it
       if (last_buf){
         if(-1 == xioctl(fd, VIDIOC_QBUF, last_buf)){
@@ -434,8 +454,17 @@ static void process_image_thread(void){
 
       // Keep references to what we passed to the NDI stack until we queue the
       // next frame, or the memory could disappear out from under us!
+      if(force_uyvy == 1){ //free the alternating buffers
+       if(frame_buffer == 0){
+        free(p_frame2);
+       }
+       if(frame_buffer == 1){
+        free(p_frame1);
+       }
+      }
       last_buf = buf.release();
       last_frame = std::move(frame);
+      
       //frames++; //keeps track of number of frames
     }
   }
@@ -507,7 +536,6 @@ static int read_frame(int &fd, enum v4l2_buf_type type, struct buffer *bufs, uns
    }
   }
   assert(buf->index < n_buffs);
-  
   if(NDIlib_send_get_no_connections(pNDI_full_send, 10000)){ //wait for a NDI receiver to be present before continuing - no need to encode without a client connected
    //printf("%x", buf->index & 0x0F);
    //fflush(stdout);
@@ -596,14 +624,15 @@ static int mainloop(void){
   
     //time_taken = (end.tv_sec - start.tv_sec) * 1e6;
     //time_taken = (time_taken + (end.tv_usec - start.tv_usec)) * 1e-6;
-    //if(time_taken>1.0){ //every second
-     //frameRate = (double)frames*0.5 +  frameRate*0.5; //more stable
-     //frames = 0;
-     //gettimeofday(&start, NULL);
-     //averageFrameTimeMilliseconds  = 1000.0/(frameRate==0?0.001:frameRate);
-     //std::cout<<"FrameRate was:"<<frameRate<<std::endl;
-     //std::cout<<"FrameTime was:"<<averageFrameTimeMilliseconds<<std::endl;
-    //}
+
+      //if(time_taken>1.0){ //every second
+        //frameRate = (double)frames*0.5 +  frameRate*0.5; //more stable
+        //frames = 0;
+        //gettimeofday(&start, NULL);
+        //averageFrameTimeMilliseconds  = 1000.0/(frameRate==0?0.001:frameRate);
+        //std::cout<<"FrameRate was:"<<frameRate<<std::endl;
+       // std::cout<<"FrameTime was:"<<averageFrameTimeMilliseconds<<std::endl;
+      //}
   }
  }
 }
@@ -760,4 +789,3 @@ int main(int argc, char **argv){
   fprintf(stderr, "\n");
   return 0;
 }
-
