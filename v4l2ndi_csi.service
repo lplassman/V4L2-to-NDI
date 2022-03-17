@@ -8,8 +8,9 @@ LimitRTPRIO=infinity
 LimitMEMLOCK=infinity
 CPUSchedulingPolicy=rr
 CPUSchedulingPriority=99
+IOSchedulingClass=realtime
 ExecStartPre=/usr/bin/v4l2-ctl --set-dv-bt-timings query
-ExecStart=/opt/v4l2ndi/bin/v4l2ndi -u -a -x 1920 -y 1080 -n 30000 -e 1001 -v "Camera"
+ExecStart=/opt/v4l2ndi/bin/v4l2ndi -u -i -x 1920 -y 1080 -n 30000 -e 1001 -v "Camera_3"
 Restart=always
 RestartSec=5
 
