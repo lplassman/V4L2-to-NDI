@@ -37,7 +37,6 @@
 NDIlib_send_create_t NDI_send_create_desc;
 NDIlib_send_instance_t pNDI_full_send;
 NDIlib_video_frame_v2_t NDI_video_frame1;
-NDIlib_video_frame_v2_t NDI_video_frame2;
 
 zs::PixelFormatConverter converter;
 zs::Frame yuy2Frame;
@@ -62,6 +61,7 @@ static int              out_buf;
 static int              force_yuyv = 0;
 static int              force_uyvy = 0;
 static int              force_nv12 = 0;
+static int              fix_csi = 0;
 static int              width = 0;
 static int              height = 0;
 static float            fps_N = 30000;
@@ -71,10 +71,9 @@ int                     m_width = 0;
 int                     m_height = 0;
 int                     m_format = 0;
 int                     frame_buffer = 0;
-uint8_t*                p_frame1;
-uint8_t*                p_frame2;
-int                     ndi_async = 0;
 int                     image_threaded = 0;
+int                     last_read_frame = 0;
+int                     num_v4l2_buffers = 4; 
 
 struct timeval start, end;
 
@@ -84,7 +83,7 @@ double  averageFrameTimeMilliseconds = 33.333;
 
 // Queues for communcating between threads
 // These (and the thread functions) should really be in C++ classes, but...
-std::size_t m_max_depth = 3;    // How many items we will queue before dropping them
+std::size_t m_max_depth = 1;    // How many items we will queue before dropping them - default
 std::mutex m_lock;
 std::condition_variable m_condvar;
 std::queue<std::unique_ptr<v4l2_buffer>> m_queue;
@@ -94,6 +93,7 @@ std::thread image_thread;
 
 //Buffers
 struct buffer          *buffers;
+uint8_t*               copy_buffer[16]; //16 is the max number of video buffers unless this number is changed
 
 static void errno_exit(const char *s){
   fprintf(stderr, "%s error %d, %s\\n", s, errno, strerror(errno));
@@ -219,7 +219,7 @@ static void init_mmap(const char *device_name, int &fd, enum v4l2_buf_type type,
   struct buffer *bufs;
   unsigned int b;
   CLEAR(req);
-  req.count = 8;
+  req.count = num_v4l2_buffers; //changed from 8 to 4
   req.type = type;
   req.memory = V4L2_MEMORY_MMAP;
 
@@ -243,7 +243,7 @@ static void init_mmap(const char *device_name, int &fd, enum v4l2_buf_type type,
    exit(EXIT_FAILURE);
   }
 
-  for(b = 0; b < req.count; ++b){
+  for(b = 0; b < req.count; ++b){ //loop through all the buffers and assign values and functions
    struct v4l2_buffer buf;
    CLEAR(buf);
    buf.type        = type;
@@ -298,6 +298,10 @@ int is_writable(int &fd, timeval* tv){
  return select(fd+1, NULL, &fdset, NULL, tv); 
 }
 
+void copy_frame(uint8_t* src, uint8_t* dst, uint32_t size){
+ memcpy(dst, src, size);
+}
+
 static void queue_wait(void){
   // Lock the queue
   std::unique_lock<std::mutex> lock_queue(m_lock);
@@ -315,7 +319,7 @@ static void queue_push(std::unique_ptr<v4l2_buffer> buf){
   m_queue.push(std::move(buf));
   // LOG(LOG_DBG, ">");	// Pushed an item on the queue
 
-  // Drop items that are to old if the queue is not keeping up
+  // Drop items that are too old if the queue is not keeping up
   while ((m_max_depth) && (m_queue.size() > m_max_depth))
   {
     // Pull the item off the queue and requeue it so we don't loose buffers!
@@ -385,6 +389,12 @@ static void process_image_thread(void){
         exit_thread = true;
         break;
       }
+      if(last_read_frame != buf->index){
+       printf("#"); fflush(stdout); //getting behind in processing frames - adds latency if this is happening
+      }
+      //printf("P"); fflush(stdout); //processing frame debugging
+      //printf("%x", buf->index & 0x0F);
+      //printf("P\n"); fflush(stdout);
 
       // Convert to UYVY if necessary, copying in-place
       if(force_yuyv == 1){
@@ -406,16 +416,10 @@ static void process_image_thread(void){
         // Zero the data elements or zs::~Frame will try to free the memory!
         src.data = dst.data = nullptr;
       }
-      if(force_uyvy == 1){ //since no conversion is performed, no memcopy has been done - perform memcpy in order to drastically reduce CPU usage
-       frame_buffer = 1 - frame_buffer; 
-       if(frame_buffer == 0){
-        p_frame1 = (uint8_t*)malloc(buf->bytesused);
-        memcpy(p_frame1, (uint8_t*)buffers[buf->index].start, buf->bytesused);
-       }
-       if(frame_buffer == 1){
-        p_frame2 = (uint8_t*)malloc(buf->bytesused);
-        memcpy(p_frame2, (uint8_t*)buffers[buf->index].start, buf->bytesused);
-       }
+
+      if(fix_csi == 1){ //fix for high cpu usage when using HDMI to CSI adapters
+       copy_buffer[buf->index] = (uint8_t*)malloc(buf->bytesused);
+       copy_frame((uint8_t*)buffers[buf->index].start, (uint8_t*)copy_buffer[buf->index], buf->bytesused);
       }
 
       // Create a new frame we can pass to the NDI stack
@@ -424,19 +428,16 @@ static void process_image_thread(void){
       frame->yres = m_height;
       frame->frame_rate_N = fps_N;
       frame->frame_rate_D = fps_D;
-      // frame->data_size_in_bytes = buf->bytesused; //for some reason this causes a segmentation fault
+      frame->line_stride_in_bytes = m_width * 2;
+      frame->data_size_in_bytes = m_width * 2;
       if(force_nv12 == 1){
        frame->FourCC = NDIlib_FourCC_type_NV12; 
       }else{
        frame->FourCC = NDIlib_FourCC_type_UYVY;
       }
-      if(force_uyvy == 1){
-       if(frame_buffer == 0){
-        frame->p_data = p_frame1;
-       }
-       if(frame_buffer == 1){
-        frame->p_data = p_frame2;
-       }
+
+      if(fix_csi == 1){
+       frame->p_data = (uint8_t*)copy_buffer[buf->index]; //copy the frame when CSI adapter is being used to prevent high CPU usage
       }else{
        frame->p_data = (uint8_t*)buffers[buf->index].start;
       }
@@ -444,6 +445,12 @@ static void process_image_thread(void){
       
       // We're now done with the previous v4l2 buffer, so requeue it
       if (last_buf){
+        if(fix_csi == 1){
+         free(copy_buffer[last_buf->index]); //free the buffer
+        }
+        //printf("D"); fflush(stdout); //dropping frame and requeue debugging
+        //printf("%x", last_buf->index & 0x0F);
+        //printf("D\n"); fflush(stdout);
         if(-1 == xioctl(fd, VIDIOC_QBUF, last_buf)){
           errno_exit("VIDIOC_QBUF");
         }
@@ -454,55 +461,13 @@ static void process_image_thread(void){
 
       // Keep references to what we passed to the NDI stack until we queue the
       // next frame, or the memory could disappear out from under us!
-      if(force_uyvy == 1){ //free the alternating buffers
-       if(frame_buffer == 0){
-        free(p_frame2);
-       }
-       if(frame_buffer == 1){
-        free(p_frame1);
-       }
-      }
+
       last_buf = buf.release();
       last_frame = std::move(frame);
       
       //frames++; //keeps track of number of frames
     }
   }
-}
-
-static void process_image_async(const void *p, int size){
- frame_buffer = 1 - frame_buffer; 
- //std::cout << "Frame size: " << size << std::endl; 
- if(frame_buffer == 0){
-  p_frame1 = (uint8_t*)malloc(size);
-  memcpy(p_frame1, (uint8_t*)p, size);
-  if(force_yuyv == 1){ //if this is enabled - convert from YUY2 to UYVY for NDI
-   yuy2Frame.data = p_frame1;
-   if(!converter.Convert(yuy2Frame,uyvyFrame)){ //convert the YUY2 frame into a UYVY frame - NDI doesn't accept a YUY2 frame
-    fprintf(stderr, "Convert failed\n");       
-   }
-   NDI_video_frame1.p_data = uyvyFrame.data; //link the UYVY frame data to the NDI frame
-  }else{
-   NDI_video_frame1.p_data = p_frame1; //link the UYVY frame data to the NDI frame 
-  }
-  NDIlib_send_send_video_async_v2(pNDI_full_send, &NDI_video_frame1); //send the data out to NDI
-  free(p_frame2);
- }
- if(frame_buffer == 1){
-  p_frame2 = (uint8_t*)malloc(size);
-  memcpy(p_frame2, (uint8_t*)p, size);
-  if(force_yuyv == 1){ //if this is enabled - convert from YUY2 to UYVY for NDI
-   yuy2Frame.data = p_frame2;
-   if(!converter.Convert(yuy2Frame,uyvyFrame)){ //convert the YUY2 frame into a UYVY frame - NDI doesn't accept a YUY2 frame
-    fprintf(stderr, "Convert failed\n");       
-   }
-   NDI_video_frame2.p_data = uyvyFrame.data; //link the UYVY frame data to the NDI frame
-  }else{
-   NDI_video_frame2.p_data = p_frame2; //link the UYVY frame data to the NDI frame 
-  }
-  NDIlib_send_send_video_async_v2(pNDI_full_send, &NDI_video_frame2); //send the data out to NDI
-  free(p_frame1);
- }
 }
 
 static void process_image(const void *p, int size){
@@ -536,17 +501,22 @@ static int read_frame(int &fd, enum v4l2_buf_type type, struct buffer *bufs, uns
    }
   }
   assert(buf->index < n_buffs);
-  if(NDIlib_send_get_no_connections(pNDI_full_send, 10000)){ //wait for a NDI receiver to be present before continuing - no need to encode without a client connected
-   //printf("%x", buf->index & 0x0F);
-   //fflush(stdout);
-   if(ndi_async == 1){
-    process_image_async(bufs[buf->index].start, buf->bytesused); //send the mmap frame buffer off to be processed
+  last_read_frame = buf->index;
+  //printf("R"); //reading frame debugging
+  //printf("%x", buf->index & 0x0F);
+  //printf("R\n"); fflush(stdout);
+
+  if(NDIlib_send_get_no_connections(pNDI_full_send, 1000)){ //wait for a NDI receiver to be present before continuing - no need to encode without a client connected
+   if(image_threaded == 1){
+    queue_push(std::move(buf));
    }else{
-    if(image_threaded == 1){
-      queue_push(std::move(buf));
-    }else{
-     process_image(bufs[buf->index].start, buf->bytesused); //send the mmap frame buffer off to be processed
-    }
+    process_image(bufs[buf->index].start, buf->bytesused); //send the mmap frame buffer off to be processed
+   }
+  }else{
+   if(image_threaded == 1){ 
+    if(-1 == xioctl(fd, VIDIOC_QBUF, buf.get())){
+     errno_exit("VIDIOC_QBUF");
+    } 
    }
   }
 
@@ -583,17 +553,6 @@ static int mainloop(void){
    NDI_video_frame1.FourCC = NDIlib_FourCC_type_UYVY; //set NDI to receive the type of frame that is going to be given to it - in this case UYVY
   }
 
-  if(ndi_async == 1){ //initialize frame2 for async
-   NDI_video_frame2.xres = m_width; 
-   NDI_video_frame2.yres = m_height;
-   NDI_video_frame2.frame_rate_N = fps_N;
-   NDI_video_frame2.frame_rate_D = fps_D;
-   if(force_nv12 == 1){
-    NDI_video_frame2.FourCC = NDIlib_FourCC_type_NV12; 
-   }else{
-    NDI_video_frame2.FourCC = NDIlib_FourCC_type_UYVY; //set NDI to receive the type of frame that is going to be given to it - in this case UYVY
-   }  
-  }
 
   while(1){ //while loop for querying for new data from video capture device and reading new frames
    for(;;){
@@ -668,6 +627,10 @@ static void close_device(void){
 static void usage(FILE *fp, int argc, char **argv){
         fprintf(fp,
                  "Usage: %s [options]\n\n"
+
+                 "'!' = Frame has been dropped\n"
+                 "'#' = Increased Latency Occuring\n\n"
+
                  "Version 1.0\n"
                  "Options:\n"
                  "-d | --device name   Video device name [%s]\n"
@@ -680,13 +643,14 @@ static void usage(FILE *fp, int argc, char **argv){
                  "-n | --numerator     Set FPS (Frames-per-second) Numerator (default is 30000)\n"
                  "-e | --denominator   Set FPS (Frames-per-second) Denominator (default is 1001)\n"
                  "-i | --threaded      Set threading to be enabled for image processing\n"
-                 "-a | --async         Set async to be enabled for NDI stream (default is disabled)\n"
                  "-v | --video name    Set name of NDI stream (default is Stream)\n"
+                 "-q | --queue level   Set the number of frames will be allowed to stay in queue before dropping (default is 1)\n"
+                 "-c | --fix csi       Fixes high CPU usage when using HDMI to CSI adapters (threaded mode only)\n"
                  "",
                  argv[0], dev_name);
 }
 
-static const char short_options[] = "d:hfumx:y:n:e:iav:";
+static const char short_options[] = "d:hfumx:y:n:e:iv:q:c";
 
 static const struct option
 long_options[] = {
@@ -700,8 +664,9 @@ long_options[] = {
         { "numerator", required_argument,    NULL, 'n' },
         { "denominator", required_argument,  NULL, 'e' },
         { "threaded", no_argument,       NULL, 'i' },
-        { "async", no_argument,       NULL, 'a' },
         { "video", required_argument,  NULL, 'v' },
+        { "queue", required_argument,  NULL, 'q' },
+        { "fix", no_argument,       NULL, 'c' },
         { 0, 0, 0, 0 }
 };
 
@@ -745,13 +710,16 @@ int main(int argc, char **argv){
      break;   
     case 'i':
      image_threaded = 1;
-     break;  
-    case 'a':
-     ndi_async = 1;
      break; 
     case 'v':
      ndi_name = optarg;
-     break;              
+     break; 
+    case 'q': //set queue limit - default to 1
+     m_max_depth = atoi(optarg);
+     break;   
+    case 'c': //set HDMI to CSI fix - applies a memcpy to the frame before going to the NDI stack. Not sure why this fixes the issue
+     fix_csi = 1;
+     break;            
     default:
      usage(stderr, argc, argv);
      exit(EXIT_FAILURE);
@@ -770,9 +738,10 @@ int main(int argc, char **argv){
   init_mmap(dev_name,fd,V4L2_BUF_TYPE_VIDEO_CAPTURE,&buffers,&n_buffers);
 
   if (image_threaded == 1){
-    image_thread = std::thread(&process_image_thread);
+    fprintf(stderr, "Image Processing Threading Enabled\n");
+    image_thread = std::thread(&process_image_thread); //start image processing thread
   }
-
+  fprintf(stderr, "Current Queue Level %u\n",m_max_depth); 
   start_capturing(dev_name, fd, V4L2_BUF_TYPE_VIDEO_CAPTURE, n_buffers);
   mainloop();
   stop_capturing(fd);
