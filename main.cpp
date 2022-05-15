@@ -398,23 +398,12 @@ static void process_image_thread(void){
 
       // Convert to UYVY if necessary, copying in-place
       if(force_yuyv == 1){
-        zs::Frame src, dst;
-        src.fourcc = (uint32_t)zs::ValidFourccCodes::YUY2;
-        src.width = m_width;
-        src.height = m_height;
-        src.size = buf->bytesused;
-        src.data = (uint8_t*)buffers[buf->index].start;
-
-        dst.fourcc = (uint32_t)zs::ValidFourccCodes::UYVY;
-        dst.size = buf->bytesused;
-        dst.data = (uint8_t*)buffers[buf->index].start;
-
-        if(!converter.Convert(src,dst)){
-          fprintf(stderr, "Convert failed\n");
-        }
-
-        // Zero the data elements or zs::~Frame will try to free the memory!
-        src.data = dst.data = nullptr;
+       for (size_t i = 0; i < (size_t)buf->bytesused / 4; i++) {
+        const uint32_t yuy2 = ((uint32_t*)buffers[buf->index].start)[i];
+		    uint32_t uyvy = (yuy2 >> 8) & 0x00ff00ff;
+		    uyvy |= ( yuy2 & 0x00ff00ff ) << 8;
+		    ((uint32_t*)buffers[buf->index].start)[i] = uyvy;
+	     }
       }
 
       if(fix_csi == 1){ //fix for high cpu usage when using HDMI to CSI adapters
