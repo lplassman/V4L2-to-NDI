@@ -110,14 +110,28 @@ sudo systemctl enable v4l2ndi_csi.service
 sudo reboot
 ```
 
-## Suggested Hardware
 
-The following latency observations are based on a Raspberry Pi 4 running Raspberry Pi OS 64-bit.
+## Suggested Hardware for HDMI Input
 
-If needing 1080p60, a USB 3.0 HDMI capture interface is required. In this case, I would suggest an Elgato capture card or one that I used made by Hornettek. Latency will be a little higher when using this method compared to the CSI input (about 120ms). Framedrops are also likely when using 1080p60 and the YUYV image format (due to image format conversion).
+Hornettek HDMI to USB 3.0 Capture Card (1080p60)
+https://www.amazon.com/s?k=hornettek+hdmi+capture&crid=IL1SBF4A56VF&sprefix=hornettek+hdmi+capture%2Caps%2C134&ref=nb_sb_noss
 
-If only using 1080p30, a HDMI to CSI adapter works good and provides lower latency (about 90ms).
+Waveshare HDMI to CSI-2 Adapter (1080p30)
+https://www.amazon.com/s?k=waveshare+hdmi+to+csi&crid=24ROTNS3MO1F5&sprefix=waveshare+hdmi+to+csi%2Caps%2C136&ref=nb_sb_noss
 
+## Latency Notes (using the suggested HDMI input hardware)
+These tests were performed using a Raspberry Pi 4B with the latest Raspberry Pi OS (64-bit) software
+
+- Hornettek HDMI capture card at 1080p60: ~110ms
+- Hornettek HDMI capture card at 1080p30: ~230ms
+- Waveshare HDMI to CSI-2 adapter at 1080p50: ~160ms
+- Waveshare HDMI to CSI-2 adapter at 1080p30: 230ms
+
+## Current Limitations
+- Raspberry Pi Cameras are not supported when using libcamera (use this project instead: https://github.com/raspberry-pi-camera/raspindi)
+- Supports 6 NDI client connections when input video format is UYVY at 1080p30
+- Supports 5 NDI client connections when input video format is UYVY at 1080p60
+- Supports 2 NDI client connections when input video format is YUV2 at 1080p60
 
 ## Helpful links
 
