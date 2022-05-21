@@ -125,7 +125,7 @@ These tests were performed using a Raspberry Pi 4B with the latest Raspberry Pi 
 - Hornettek HDMI capture card at 1080p60: ~110ms
 - Hornettek HDMI capture card at 1080p30: ~230ms
 - Waveshare HDMI to CSI-2 adapter at 1080p50: ~160ms
-- Waveshare HDMI to CSI-2 adapter at 1080p30: 230ms
+- Waveshare HDMI to CSI-2 adapter at 1080p30: ~230ms
 
 ## Current Limitations
 - Raspberry Pi Cameras are not supported when using libcamera (use this project instead: https://github.com/raspberry-pi-camera/raspindi)
