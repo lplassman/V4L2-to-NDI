@@ -4,6 +4,9 @@ INSTALL_DIR="/opt/v4l2ndi"
 BIN_DIR="$INSTALL_DIR/bin"
 LIB_DIR="/usr/lib"
 
+rm -R "$INSTALL_DIR"
+rm -R "$LIB_DIR/libndi*"
+
 if [ ! -d "$INSTALL_DIR" ]; then
   mkdir "$INSTALL_DIR"
 fi
