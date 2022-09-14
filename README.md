@@ -20,7 +20,7 @@ sudo apt install git -y
 Clone this repository and `cd` into it.
 
 ```
-git clone https://github.com/windows10luke/V4L2-to-NDI.git && cd V4L2-to-NDI
+git clone https://github.com/lplassman/V4L2-to-NDI.git && cd V4L2-to-NDI
 ```
 
 
@@ -108,6 +108,16 @@ sudo systemctl enable v4l2ndi_csi.service
 
 ```
 sudo reboot
+```
+
+### Upgrading (with HDMI-to-CSI service enabled on a Raspberry Pi 4 64-bit OS)
+```
+sudo rm -R V4L2-to-NDI
+git clone https://github.com/lplassman/V4L2-to-NDI.git && cd V4L2-to-NDI
+sudo service v4l2ndi_csi stop
+sudo bash ./easy-install-rpi-aarch64.sh
+cd
+sudo service v4l2ndi_csi start
 ```
 
 
