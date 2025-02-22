@@ -75,6 +75,8 @@ int                     image_threaded = 0;
 int                     last_read_frame = 0;
 int                     num_v4l2_buffers = 4; 
 
+static bool		print_drops = 0;
+
 struct timeval start, end;
 
 unsigned int frames = 0;
@@ -330,7 +332,11 @@ static void queue_push(std::unique_ptr<v4l2_buffer> buf){
 
     m_queue.pop();
     // LOG(LOG_ERR, "!");	// Dropped an item from the queue!
-    printf("!"); fflush(stdout);
+    if (print_drops) {
+	// Drops are legitimate if, for example, sending a device that produces data at 60fps
+	// onto a 30fps NDI connection
+    	printf("!"); fflush(stdout);
+    }
   }
 
   // Unlock the queue...
@@ -368,7 +374,7 @@ static void process_image_thread(void){
   std::unique_ptr<NDIlib_video_frame_v2_t> frame, last_frame;
 
   // Cycle until we are told to exit
-  while (true)
+  while (!exit_thread)
   {
     // Wait for the queue to have some data
     queue_wait();
