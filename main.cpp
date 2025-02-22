@@ -662,6 +662,7 @@ long_options[] = {
         { "video", required_argument,  NULL, 'v' },
         { "queue", required_argument,  NULL, 'q' },
         { "fix", no_argument,       NULL, 'c' },
+	{ "print_drops", no_argument, NULL, 'D' },
         { 0, 0, 0, 0 }
 };
 
@@ -714,7 +715,10 @@ int main(int argc, char **argv){
      break;   
     case 'c': //set HDMI to CSI fix - applies a memcpy to the frame before going to the NDI stack. Not sure why this fixes the issue
      fix_csi = 1;
-     break;            
+     break;
+    case 'D':
+     print_drops = true;
+     break;
     default:
      usage(stderr, argc, argv);
      exit(EXIT_FAILURE);
