@@ -145,6 +145,8 @@ static void open_device(const char *device_name, int &fd){ //open the device for
 static void init_device(const char *d_name, int fd, unsigned int d_type, unsigned int d_format, unsigned int d_width, unsigned int d_height){ //initialize device
   struct v4l2_capability cap;
   struct v4l2_format fmt;
+  struct v4l2_streamparm streamparm;
+
   //Query capabilities
   if(-1 == xioctl(fd, VIDIOC_QUERYCAP, &cap)){
    if(EINVAL == errno){
@@ -214,6 +216,25 @@ static void init_device(const char *d_name, int fd, unsigned int d_type, unsigne
   m_width = fmt.fmt.pix.width;
   m_height = fmt.fmt.pix.height;  
   m_format = fmt.fmt.pix.pixelformat;
+
+  streamparm.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+  if (-1 == xioctl(fd, VIDIOC_G_PARM, &streamparm)) {
+    errno_exit("VIDEOC_G_PARM");
+  }
+
+  if (streamparm.parm.capture.capability & V4L2_CAP_TIMEPERFRAME) {
+    fprintf(stderr, "%s: setting capture time-per-frame", d_name);
+    // Note that is "secs per frame" not fps
+    streamparm.parm.capture.timeperframe.numerator = (__u32)fps_D;
+    streamparm.parm.capture.timeperframe.denominator = (__u32)fps_N;
+    if (-1 == xioctl(fd, VIDIOC_S_PARM, &streamparm)) {
+      errno_exit("VIDEOC_S_PARM");
+    }
+    fprintf(stderr, " -> new fps=%0.2f\n",
+           1/((float)streamparm.parm.capture.timeperframe.numerator /
+	      (float)streamparm.parm.capture.timeperframe.denominator));
+  }
+
 }
 
 static void init_mmap(const char *device_name, int &fd, enum v4l2_buf_type type, struct buffer **bufs_out, unsigned int *n_bufs){  //initialize buffer for device
