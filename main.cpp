@@ -28,8 +28,6 @@
 
 #include <linux/videodev2.h>
 #include <Processing.NDI.Lib.h>
-#include <PixelFormatConverter.h>
-
 
 #define CLEAR(x) memset(&(x), 0, sizeof(x))
 
@@ -37,10 +35,6 @@
 NDIlib_send_create_t NDI_send_create_desc;
 NDIlib_send_instance_t pNDI_full_send;
 NDIlib_video_frame_v2_t NDI_video_frame1;
-
-zs::PixelFormatConverter converter;
-zs::Frame yuy2Frame;
-zs::Frame uyvyFrame;
 
 enum io_method {
         IO_METHOD_READ,
@@ -386,6 +380,17 @@ static std::unique_ptr<v4l2_buffer> queue_pop_opt(void){
   return item;
 }
 
+// convert yuyv to uyvy in place
+static void convert_yuyv(int buf_index, int bytesused)
+{
+  for (size_t i = 0; i < (size_t)bytesused / 4; i++) {
+    const uint32_t yuy2 = ((uint32_t*)buffers[buf_index].start)[i];
+    uint32_t uyvy = (yuy2 >> 8) & 0x00ff00ff;
+    uyvy |= ( yuy2 & 0x00ff00ff ) << 8;
+    ((uint32_t*)buffers[buf_index].start)[i] = uyvy;
+  }
+}
+
 static void process_image_thread(void){
   // Used to signal exit
   bool exit_thread = false;
@@ -424,13 +429,8 @@ static void process_image_thread(void){
       //printf("P\n"); fflush(stdout);
 
       // Convert to UYVY if necessary, copying in-place
-      if(force_yuyv == 1){
-       for (size_t i = 0; i < (size_t)buf->bytesused / 4; i++) {
-        const uint32_t yuy2 = ((uint32_t*)buffers[buf->index].start)[i];
-		    uint32_t uyvy = (yuy2 >> 8) & 0x00ff00ff;
-		    uyvy |= ( yuy2 & 0x00ff00ff ) << 8;
-		    ((uint32_t*)buffers[buf->index].start)[i] = uyvy;
-	     }
+      if(force_yuyv == 1) {
+	convert_yuyv(buf->index, buf->bytesused);
       }
 
       if(fix_csi == 1){ //fix for high cpu usage when using HDMI to CSI adapters
@@ -487,17 +487,9 @@ static void process_image_thread(void){
 }
 
 static void process_image(const void *p, int size){
- if(force_yuyv == 1){ //if this is enabled - convert from YUY2 to UYVY for NDI
-  yuy2Frame.data = (uint8_t*)p;
-  if(!converter.Convert(yuy2Frame,uyvyFrame)){ //convert the YUY2 frame into a UYVY frame - NDI doesn't accept a YUY2 frame
-   fprintf(stderr, "Convert failed\n");       
-  }
-  NDI_video_frame1.p_data = uyvyFrame.data; //link the UYVY frame data to the NDI frame
- }else{
   NDI_video_frame1.p_data = (uint8_t*)p; //link the UYVY frame data to the NDI frame 
- }
- NDIlib_send_send_video_v2(pNDI_full_send, &NDI_video_frame1); //send the data out to NDI
- //frames++;
+  NDIlib_send_send_video_v2(pNDI_full_send, &NDI_video_frame1); //send the data out to NDI
+  //frames++;
 }
 
 static int read_frame(int &fd, enum v4l2_buf_type type, struct buffer *bufs, unsigned int n_buffs){ //this function reads the frame from the video capture device
@@ -526,7 +518,10 @@ static int read_frame(int &fd, enum v4l2_buf_type type, struct buffer *bufs, uns
    if(image_threaded == 1){
     queue_push(std::move(buf));
    }else{
-    process_image(bufs[buf->index].start, buf->bytesused); //send the mmap frame buffer off to be processed
+     if (force_yuyv) {
+       convert_yuyv(buf->index, buf->bytesused);
+     }
+     process_image(bufs[buf->index].start, buf->bytesused); //send the mmap frame buffer off to be processed
    }
   }else{
    if(image_threaded == 1){ 
@@ -557,8 +552,7 @@ static int mainloop(void){
    fprintf(stderr, "Failed to create NDI Full Send");
    exit(1);
   }
-  yuy2Frame = zs::Frame(m_width,m_height, MAKE_FOURCC_CODE('Y','U','Y','2')); //initialize conversion frame storage - YUY2
-  uyvyFrame.fourcc = MAKE_FOURCC_CODE('U','Y','V','Y'); //initialize conversion frame storage - UYVY
+
   NDI_video_frame1.xres = m_width;
   NDI_video_frame1.yres = m_height;
   NDI_video_frame1.frame_rate_N = fps_N;
