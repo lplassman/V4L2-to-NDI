@@ -69,8 +69,6 @@ int                     image_threaded = 0;
 int                     last_read_frame = 0;
 int                     num_v4l2_buffers = 4; 
 
-static bool		print_drops = 0;
-
 struct timeval start, end;
 
 unsigned int frames = 0;
@@ -140,7 +138,8 @@ static void init_device(const char *d_name, int fd, unsigned int d_type, unsigne
   struct v4l2_capability cap;
   struct v4l2_format fmt;
   struct v4l2_streamparm streamparm;
-
+  enum v4l2_priority priority = V4L2_PRIORITY_RECORD;
+  
   //Query capabilities
   if(-1 == xioctl(fd, VIDIOC_QUERYCAP, &cap)){
    if(EINVAL == errno){
@@ -228,7 +227,10 @@ static void init_device(const char *d_name, int fd, unsigned int d_type, unsigne
            1/((float)streamparm.parm.capture.timeperframe.numerator /
 	      (float)streamparm.parm.capture.timeperframe.denominator));
   }
-
+  // Try to increase device priority
+  fprintf(stderr, "%s: setting device priority to V4L2_PRIORITY_RECORD: %s\n", d_name,
+	  -1 == xioctl(fd, VIDIOC_S_PRIORITY, &priority) ? "Failed" : "Success");
+  
 }
 
 static void init_mmap(const char *device_name, int &fd, enum v4l2_buf_type type, struct buffer **bufs_out, unsigned int *n_bufs){  //initialize buffer for device
@@ -347,11 +349,7 @@ static void queue_push(std::unique_ptr<v4l2_buffer> buf){
 
     m_queue.pop();
     // LOG(LOG_ERR, "!");	// Dropped an item from the queue!
-    if (print_drops) {
-	// Drops are legitimate if, for example, sending a device that produces data at 60fps
-	// onto a 30fps NDI connection
-    	printf("!"); fflush(stdout);
-    }
+    printf("!"); fflush(stdout);
   }
 
   // Unlock the queue...
@@ -380,14 +378,18 @@ static std::unique_ptr<v4l2_buffer> queue_pop_opt(void){
   return item;
 }
 
-// convert yuyv to uyvy in place
-static void convert_yuyv(int buf_index, int bytesused)
+/*
+ * convert yuyv to uyvy in place
+ */
+static void convert_yuyv(const void *p, int bytesused)
 {
-  for (size_t i = 0; i < (size_t)bytesused / 4; i++) {
-    const uint32_t yuy2 = ((uint32_t*)buffers[buf_index].start)[i];
+  uint32_t *pp = (uint32_t *)p;
+  
+  for (size_t i = 0; i < (size_t)bytesused / sizeof(uint32_t); i++) {
+    const uint32_t yuy2 = *pp;
     uint32_t uyvy = (yuy2 >> 8) & 0x00ff00ff;
     uyvy |= ( yuy2 & 0x00ff00ff ) << 8;
-    ((uint32_t*)buffers[buf_index].start)[i] = uyvy;
+    *pp++ = uyvy;
   }
 }
 
@@ -430,7 +432,7 @@ static void process_image_thread(void){
 
       // Convert to UYVY if necessary, copying in-place
       if(force_yuyv == 1) {
-	convert_yuyv(buf->index, buf->bytesused);
+	convert_yuyv(buffers[buf->index].start, buf->bytesused);
       }
 
       if(fix_csi == 1){ //fix for high cpu usage when using HDMI to CSI adapters
@@ -487,6 +489,9 @@ static void process_image_thread(void){
 }
 
 static void process_image(const void *p, int size){
+  if (force_yuyv) {
+    convert_yuyv(p, size);
+  }
   NDI_video_frame1.p_data = (uint8_t*)p; //link the UYVY frame data to the NDI frame 
   NDIlib_send_send_video_v2(pNDI_full_send, &NDI_video_frame1); //send the data out to NDI
   //frames++;
@@ -518,9 +523,6 @@ static int read_frame(int &fd, enum v4l2_buf_type type, struct buffer *bufs, uns
    if(image_threaded == 1){
     queue_push(std::move(buf));
    }else{
-     if (force_yuyv) {
-       convert_yuyv(buf->index, buf->bytesused);
-     }
      process_image(bufs[buf->index].start, buf->bytesused); //send the mmap frame buffer off to be processed
    }
   }else{
@@ -677,7 +679,6 @@ long_options[] = {
         { "video", required_argument,  NULL, 'v' },
         { "queue", required_argument,  NULL, 'q' },
         { "fix", no_argument,       NULL, 'c' },
-	{ "print_drops", no_argument, NULL, 'D' },
         { 0, 0, 0, 0 }
 };
 
@@ -730,9 +731,6 @@ int main(int argc, char **argv){
      break;   
     case 'c': //set HDMI to CSI fix - applies a memcpy to the frame before going to the NDI stack. Not sure why this fixes the issue
      fix_csi = 1;
-     break;
-    case 'D':
-     print_drops = true;
      break;
     default:
      usage(stderr, argc, argv);
