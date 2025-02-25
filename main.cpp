@@ -28,8 +28,6 @@
 
 #include <linux/videodev2.h>
 #include <Processing.NDI.Lib.h>
-#include <PixelFormatConverter.h>
-
 
 #define CLEAR(x) memset(&(x), 0, sizeof(x))
 
@@ -37,10 +35,6 @@
 NDIlib_send_create_t NDI_send_create_desc;
 NDIlib_send_instance_t pNDI_full_send;
 NDIlib_video_frame_v2_t NDI_video_frame1;
-
-zs::PixelFormatConverter converter;
-zs::Frame yuy2Frame;
-zs::Frame uyvyFrame;
 
 enum io_method {
         IO_METHOD_READ,
@@ -143,6 +137,9 @@ static void open_device(const char *device_name, int &fd){ //open the device for
 static void init_device(const char *d_name, int fd, unsigned int d_type, unsigned int d_format, unsigned int d_width, unsigned int d_height){ //initialize device
   struct v4l2_capability cap;
   struct v4l2_format fmt;
+  struct v4l2_streamparm streamparm;
+  enum v4l2_priority priority = V4L2_PRIORITY_RECORD;
+  
   //Query capabilities
   if(-1 == xioctl(fd, VIDIOC_QUERYCAP, &cap)){
    if(EINVAL == errno){
@@ -212,6 +209,28 @@ static void init_device(const char *d_name, int fd, unsigned int d_type, unsigne
   m_width = fmt.fmt.pix.width;
   m_height = fmt.fmt.pix.height;  
   m_format = fmt.fmt.pix.pixelformat;
+
+  streamparm.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+  if (-1 == xioctl(fd, VIDIOC_G_PARM, &streamparm)) {
+    errno_exit("VIDEOC_G_PARM");
+  }
+
+  if (streamparm.parm.capture.capability & V4L2_CAP_TIMEPERFRAME) {
+    fprintf(stderr, "%s: setting capture time-per-frame", d_name);
+    // Note that is "secs per frame" not fps
+    streamparm.parm.capture.timeperframe.numerator = (__u32)fps_D;
+    streamparm.parm.capture.timeperframe.denominator = (__u32)fps_N;
+    if (-1 == xioctl(fd, VIDIOC_S_PARM, &streamparm)) {
+      errno_exit("VIDEOC_S_PARM");
+    }
+    fprintf(stderr, " -> new fps=%0.2f\n",
+           1/((float)streamparm.parm.capture.timeperframe.numerator /
+	      (float)streamparm.parm.capture.timeperframe.denominator));
+  }
+  // Try to increase device priority
+  fprintf(stderr, "%s: setting device priority to V4L2_PRIORITY_RECORD: %s\n", d_name,
+	  -1 == xioctl(fd, VIDIOC_S_PRIORITY, &priority) ? "Failed" : "Success");
+  
 }
 
 static void init_mmap(const char *device_name, int &fd, enum v4l2_buf_type type, struct buffer **bufs_out, unsigned int *n_bufs){  //initialize buffer for device
@@ -359,6 +378,21 @@ static std::unique_ptr<v4l2_buffer> queue_pop_opt(void){
   return item;
 }
 
+/*
+ * convert yuyv to uyvy in place
+ */
+static void convert_yuyv(const void *p, int bytesused)
+{
+  uint32_t *pp = (uint32_t *)p;
+  
+  for (size_t i = 0; i < (size_t)bytesused / sizeof(uint32_t); i++) {
+    const uint32_t yuy2 = *pp;
+    uint32_t uyvy = (yuy2 >> 8) & 0x00ff00ff;
+    uyvy |= ( yuy2 & 0x00ff00ff ) << 8;
+    *pp++ = uyvy;
+  }
+}
+
 static void process_image_thread(void){
   // Used to signal exit
   bool exit_thread = false;
@@ -368,7 +402,7 @@ static void process_image_thread(void){
   std::unique_ptr<NDIlib_video_frame_v2_t> frame, last_frame;
 
   // Cycle until we are told to exit
-  while (true)
+  while (!exit_thread)
   {
     // Wait for the queue to have some data
     queue_wait();
@@ -397,13 +431,8 @@ static void process_image_thread(void){
       //printf("P\n"); fflush(stdout);
 
       // Convert to UYVY if necessary, copying in-place
-      if(force_yuyv == 1){
-       for (size_t i = 0; i < (size_t)buf->bytesused / 4; i++) {
-        const uint32_t yuy2 = ((uint32_t*)buffers[buf->index].start)[i];
-		    uint32_t uyvy = (yuy2 >> 8) & 0x00ff00ff;
-		    uyvy |= ( yuy2 & 0x00ff00ff ) << 8;
-		    ((uint32_t*)buffers[buf->index].start)[i] = uyvy;
-	     }
+      if(force_yuyv == 1) {
+	convert_yuyv(buffers[buf->index].start, buf->bytesused);
       }
 
       if(fix_csi == 1){ //fix for high cpu usage when using HDMI to CSI adapters
@@ -460,17 +489,12 @@ static void process_image_thread(void){
 }
 
 static void process_image(const void *p, int size){
- if(force_yuyv == 1){ //if this is enabled - convert from YUY2 to UYVY for NDI
-  yuy2Frame.data = (uint8_t*)p;
-  if(!converter.Convert(yuy2Frame,uyvyFrame)){ //convert the YUY2 frame into a UYVY frame - NDI doesn't accept a YUY2 frame
-   fprintf(stderr, "Convert failed\n");       
+  if (force_yuyv) {
+    convert_yuyv(p, size);
   }
-  NDI_video_frame1.p_data = uyvyFrame.data; //link the UYVY frame data to the NDI frame
- }else{
   NDI_video_frame1.p_data = (uint8_t*)p; //link the UYVY frame data to the NDI frame 
- }
- NDIlib_send_send_video_v2(pNDI_full_send, &NDI_video_frame1); //send the data out to NDI
- //frames++;
+  NDIlib_send_send_video_v2(pNDI_full_send, &NDI_video_frame1); //send the data out to NDI
+  //frames++;
 }
 
 static int read_frame(int &fd, enum v4l2_buf_type type, struct buffer *bufs, unsigned int n_buffs){ //this function reads the frame from the video capture device
@@ -499,7 +523,7 @@ static int read_frame(int &fd, enum v4l2_buf_type type, struct buffer *bufs, uns
    if(image_threaded == 1){
     queue_push(std::move(buf));
    }else{
-    process_image(bufs[buf->index].start, buf->bytesused); //send the mmap frame buffer off to be processed
+     process_image(bufs[buf->index].start, buf->bytesused); //send the mmap frame buffer off to be processed
    }
   }else{
    if(image_threaded == 1){ 
@@ -530,8 +554,7 @@ static int mainloop(void){
    fprintf(stderr, "Failed to create NDI Full Send");
    exit(1);
   }
-  yuy2Frame = zs::Frame(m_width,m_height, MAKE_FOURCC_CODE('Y','U','Y','2')); //initialize conversion frame storage - YUY2
-  uyvyFrame.fourcc = MAKE_FOURCC_CODE('U','Y','V','Y'); //initialize conversion frame storage - UYVY
+
   NDI_video_frame1.xres = m_width;
   NDI_video_frame1.yres = m_height;
   NDI_video_frame1.frame_rate_N = fps_N;
@@ -708,7 +731,7 @@ int main(int argc, char **argv){
      break;   
     case 'c': //set HDMI to CSI fix - applies a memcpy to the frame before going to the NDI stack. Not sure why this fixes the issue
      fix_csi = 1;
-     break;            
+     break;
     default:
      usage(stderr, argc, argv);
      exit(EXIT_FAILURE);
