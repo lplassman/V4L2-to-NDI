@@ -566,6 +566,7 @@ static int mainloop(void){
 
 
   while(1){ //while loop for querying for new data from video capture device and reading new frames
+   int consecutive_timeouts = 0;
    for(;;){
     struct timeval tv;
     int r;
@@ -579,9 +580,15 @@ static int mainloop(void){
      errno_exit("select");
     }
     if(0 == r){
-     fprintf(stderr, "select timeout, retrying\n");
+     consecutive_timeouts++;
+     fprintf(stderr, "select timeout, retrying (%d/10)\n", consecutive_timeouts);
+     if (consecutive_timeouts >= 10) {
+      fprintf(stderr, "select timeout: no frames received for 10 seconds, exiting\n");
+      exit(EXIT_FAILURE);
+     }
      continue;
     }
+    consecutive_timeouts = 0;
 
     if(r == 1){
      read_frame(fd, V4L2_BUF_TYPE_VIDEO_CAPTURE, buffers, n_buffers); //read new frame 
