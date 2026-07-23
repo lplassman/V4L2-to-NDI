@@ -90,7 +90,7 @@ struct buffer          *buffers;
 uint8_t*               copy_buffer[16]; //16 is the max number of video buffers unless this number is changed
 
 static void errno_exit(const char *s){
-  fprintf(stderr, "%s error %d, %s\\n", s, errno, strerror(errno));
+  fprintf(stderr, "%s error %d, %s\n", s, errno, strerror(errno));
   exit(EXIT_FAILURE);
 }
 
@@ -212,20 +212,19 @@ static void init_device(const char *d_name, int fd, unsigned int d_type, unsigne
 
   streamparm.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
   if (-1 == xioctl(fd, VIDIOC_G_PARM, &streamparm)) {
-    errno_exit("VIDEOC_G_PARM");
-  }
-
-  if (streamparm.parm.capture.capability & V4L2_CAP_TIMEPERFRAME) {
+    fprintf(stderr, "%s: VIDIOC_G_PARM not supported (errno %d), skipping frame rate config\n", d_name, errno);
+  } else if (streamparm.parm.capture.capability & V4L2_CAP_TIMEPERFRAME) {
     fprintf(stderr, "%s: setting capture time-per-frame", d_name);
     // Note that is "secs per frame" not fps
     streamparm.parm.capture.timeperframe.numerator = (__u32)fps_D;
     streamparm.parm.capture.timeperframe.denominator = (__u32)fps_N;
     if (-1 == xioctl(fd, VIDIOC_S_PARM, &streamparm)) {
-      errno_exit("VIDEOC_S_PARM");
-    }
-    fprintf(stderr, " -> new fps=%0.2f\n",
-           1/((float)streamparm.parm.capture.timeperframe.numerator /
+      fprintf(stderr, "\n%s: VIDIOC_S_PARM failed (errno %d), frame rate not set\n", d_name, errno);
+    } else {
+      fprintf(stderr, " -> new fps=%0.2f\n",
+             1/((float)streamparm.parm.capture.timeperframe.numerator /
 	      (float)streamparm.parm.capture.timeperframe.denominator));
+    }
   }
   // Try to increase device priority
   fprintf(stderr, "%s: setting device priority to V4L2_PRIORITY_RECORD: %s\n", d_name,
@@ -251,14 +250,14 @@ static void init_mmap(const char *device_name, int &fd, enum v4l2_buf_type type,
    }
   }
   if (req.count < 2) {
-   fprintf(stderr, "Insufficient buffer memory on %s\\n",device_name);
+   fprintf(stderr, "Insufficient buffer memory on %s\n",device_name);
    exit(EXIT_FAILURE);
   }
   //std::cout << "Buffer Size: " << sizeof(*bufs) << std::endl;
   bufs = (buffer*)calloc(req.count, sizeof(*bufs));
 
   if(!bufs){
-   fprintf(stderr, "Out of memory\\n");
+   fprintf(stderr, "Out of memory\n");
    exit(EXIT_FAILURE);
   }
 
@@ -580,8 +579,8 @@ static int mainloop(void){
      errno_exit("select");
     }
     if(0 == r){
-     fprintf(stderr, "select timeout\n");
-     exit(EXIT_FAILURE);
+     fprintf(stderr, "select timeout, retrying\n");
+     continue;
     }
 
     if(r == 1){
@@ -759,9 +758,8 @@ int main(int argc, char **argv){
   stop_capturing(fd);
 
   if (image_threaded == 1){
-    // Signal the image thread to exit by sending an empty message
-    auto nullmsg = std::make_unique<v4l2_buffer>();
-    queue_push(std::move(nullmsg));
+    // Signal the image thread to exit by pushing a null pointer
+    queue_push(std::unique_ptr<v4l2_buffer>(nullptr));
     image_thread.join();
   }
 
