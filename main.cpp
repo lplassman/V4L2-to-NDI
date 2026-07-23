@@ -10,6 +10,7 @@
 #include <string.h>
 #include <assert.h>
 #include <iostream>
+#include <atomic>
 #include <condition_variable>
 #include <mutex>
 #include <queue>
@@ -81,6 +82,7 @@ std::size_t m_max_depth = 1;    // How many items we will queue before dropping 
 std::mutex m_lock;
 std::condition_variable m_condvar;
 std::queue<std::unique_ptr<v4l2_buffer>> m_queue;
+std::atomic<bool> m_exit_thread{false};
 
 // Thread for processing frames
 std::thread image_thread;
@@ -90,7 +92,7 @@ struct buffer          *buffers;
 uint8_t*               copy_buffer[16]; //16 is the max number of video buffers unless this number is changed
 
 static void errno_exit(const char *s){
-  fprintf(stderr, "%s error %d, %s\\n", s, errno, strerror(errno));
+  fprintf(stderr, "%s error %d, %s\n", s, errno, strerror(errno));
   exit(EXIT_FAILURE);
 }
 
@@ -212,20 +214,23 @@ static void init_device(const char *d_name, int fd, unsigned int d_type, unsigne
 
   streamparm.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
   if (-1 == xioctl(fd, VIDIOC_G_PARM, &streamparm)) {
-    errno_exit("VIDEOC_G_PARM");
-  }
-
-  if (streamparm.parm.capture.capability & V4L2_CAP_TIMEPERFRAME) {
+    if (errno == ENOTTY || errno == EINVAL) {
+      fprintf(stderr, "%s: VIDIOC_G_PARM not supported (errno %d), skipping frame rate config\n", d_name, errno);
+    } else {
+      errno_exit("VIDIOC_G_PARM");
+    }
+  } else if (streamparm.parm.capture.capability & V4L2_CAP_TIMEPERFRAME) {
     fprintf(stderr, "%s: setting capture time-per-frame", d_name);
     // Note that is "secs per frame" not fps
     streamparm.parm.capture.timeperframe.numerator = (__u32)fps_D;
     streamparm.parm.capture.timeperframe.denominator = (__u32)fps_N;
     if (-1 == xioctl(fd, VIDIOC_S_PARM, &streamparm)) {
-      errno_exit("VIDEOC_S_PARM");
-    }
-    fprintf(stderr, " -> new fps=%0.2f\n",
-           1/((float)streamparm.parm.capture.timeperframe.numerator /
+      fprintf(stderr, "\n%s: VIDIOC_S_PARM failed (errno %d), frame rate not set\n", d_name, errno);
+    } else {
+      fprintf(stderr, " -> new fps=%0.2f\n",
+             1/((float)streamparm.parm.capture.timeperframe.numerator /
 	      (float)streamparm.parm.capture.timeperframe.denominator));
+    }
   }
   // Try to increase device priority
   fprintf(stderr, "%s: setting device priority to V4L2_PRIORITY_RECORD: %s\n", d_name,
@@ -251,14 +256,14 @@ static void init_mmap(const char *device_name, int &fd, enum v4l2_buf_type type,
    }
   }
   if (req.count < 2) {
-   fprintf(stderr, "Insufficient buffer memory on %s\\n",device_name);
+   fprintf(stderr, "Insufficient buffer memory on %s\n",device_name);
    exit(EXIT_FAILURE);
   }
   //std::cout << "Buffer Size: " << sizeof(*bufs) << std::endl;
   bufs = (buffer*)calloc(req.count, sizeof(*bufs));
 
   if(!bufs){
-   fprintf(stderr, "Out of memory\\n");
+   fprintf(stderr, "Out of memory\n");
    exit(EXIT_FAILURE);
   }
 
@@ -325,8 +330,8 @@ static void queue_wait(void){
   // Lock the queue
   std::unique_lock<std::mutex> lock_queue(m_lock);
 
-  // Until we are woken up with a frame
-  while (m_queue.empty())
+  // Until we are woken up with a frame or told to exit
+  while (m_queue.empty() && !m_exit_thread)
     m_condvar.wait(lock_queue);
 }
 
@@ -394,17 +399,14 @@ static void convert_yuyv(const void *p, int bytesused)
 }
 
 static void process_image_thread(void){
-  // Used to signal exit
-  bool exit_thread = false;
-
   v4l2_buffer* last_buf = nullptr;
 
   std::unique_ptr<NDIlib_video_frame_v2_t> frame, last_frame;
 
   // Cycle until we are told to exit
-  while (!exit_thread)
+  while (!m_exit_thread)
   {
-    // Wait for the queue to have some data
+    // Wait for the queue to have some data or an exit signal
     queue_wait();
 
     while (true)
@@ -418,11 +420,6 @@ static void process_image_thread(void){
         break;
       }
 
-      // A valid unique_ptr to nullptr is submitted as a signal to exit the thread
-      if (buf.get() == nullptr) {
-        exit_thread = true;
-        break;
-      }
       if(last_read_frame != buf->index){
        printf("#"); fflush(stdout); //getting behind in processing frames - adds latency if this is happening
       }
@@ -567,6 +564,7 @@ static int mainloop(void){
 
 
   while(1){ //while loop for querying for new data from video capture device and reading new frames
+   int consecutive_timeouts = 0;
    for(;;){
     struct timeval tv;
     int r;
@@ -580,9 +578,15 @@ static int mainloop(void){
      errno_exit("select");
     }
     if(0 == r){
-     fprintf(stderr, "select timeout\n");
-     exit(EXIT_FAILURE);
+     consecutive_timeouts++;
+     fprintf(stderr, "select timeout, retrying (%d/10)\n", consecutive_timeouts);
+     if (consecutive_timeouts >= 10) {
+      fprintf(stderr, "select timeout: no frames received for 10 seconds, exiting\n");
+      exit(EXIT_FAILURE);
+     }
+     continue;
     }
+    consecutive_timeouts = 0;
 
     if(r == 1){
      read_frame(fd, V4L2_BUF_TYPE_VIDEO_CAPTURE, buffers, n_buffers); //read new frame 
@@ -759,9 +763,9 @@ int main(int argc, char **argv){
   stop_capturing(fd);
 
   if (image_threaded == 1){
-    // Signal the image thread to exit by sending an empty message
-    auto nullmsg = std::make_unique<v4l2_buffer>();
-    queue_push(std::move(nullmsg));
+    // Signal the image thread to exit and wake it if it is blocked in queue_wait
+    m_exit_thread = true;
+    m_condvar.notify_one();
     image_thread.join();
   }
 
