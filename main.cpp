@@ -458,6 +458,12 @@ static void process_image_thread(void){
       }
       //std::cout<<"FrameData is:"<<(uint8_t*)buffers[buf->index].start<<std::endl;
       
+      // Pass the frame to the NDI stack.
+      // This must be called BEFORE freeing copy_buffer[last_buf->index] because
+      // NDIlib_send_send_video_async_v2 holds the previous frame's p_data until
+      // the next call.  Calling it here releases NDI's hold on the old buffer.
+      NDIlib_send_send_video_async_v2(pNDI_full_send, frame.get());
+
       // We're now done with the previous v4l2 buffer, so requeue it
       if (last_buf){
         if(fix_csi == 1){
@@ -470,9 +476,6 @@ static void process_image_thread(void){
           errno_exit("VIDIOC_QBUF");
         }
       }
-
-      // Pass the frame to the NDI stack
-      NDIlib_send_send_video_async_v2(pNDI_full_send, frame.get());
 
       // Keep references to what we passed to the NDI stack until we queue the
       // next frame, or the memory could disappear out from under us!
